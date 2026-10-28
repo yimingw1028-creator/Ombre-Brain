@@ -47,6 +47,9 @@ RUN pip install --no-cache-dir --retries 10 --timeout 120 \
         ${PIP_TRUSTED_HOST:+--trusted-host "$PIP_TRUSTED_HOST"} \
         --require-hashes -r requirements.lock.txt
 
+# eMudhra 证书事件（2026-10）：单独升级 certifi，锁文件更新前的临时补丁
+RUN pip install --no-cache-dir --upgrade "certifi>=2026.10.19"
+
 # Copy project files / 复制项目文件
 COPY src/ ./src/
 COPY frontend/ ./frontend/
