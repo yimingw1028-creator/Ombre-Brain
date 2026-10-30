@@ -86,7 +86,11 @@ def test_malicious_memory_is_returned_verbatim_without_any_safety_markers():
 def test_every_persisted_dream_surface_is_shown_verbatim_without_changing_legal_bodies(
     monkeypatch,
 ):
-    monkeypatch.setattr(dream_output.rt, "config", {"surfacing": {"feel_max_tokens": 10_000}})
+    monkeypatch.setattr(
+        dream_output.rt,
+        "config",
+        {"surfacing": {"feel_max_tokens": 10_000, "dream_core_mode": "full"}},
+    )
     recent_body = "\n recent [[正文]] 尾部空格  "
     core_body = "  core [[正文]]\n"
     plan_body = "plan [[正文]]\n第二行  "
@@ -264,3 +268,22 @@ def test_dream_global_budget_omits_whole_blocks_without_truncating_bodies(
     assert dream_output.count_tokens_approx(result) <= budget
     _assert_no_markers(result)
     assert "dream 总预算未展开" in result
+
+
+def test_core_context_defaults_to_title_catalog(monkeypatch):
+    """默认只给核心准则目录：一条一行（ID + 名字），不放正文。"""
+    monkeypatch.setattr(dream_output.rt, "config", {})
+    core = _bucket("core-a", "核心正文不应出现在目录里", pinned=True, importance=10)
+    core["metadata"]["name"] = "门在我这边"
+    result = dream_output.format_dream_output(
+        recent=[_bucket("recent", "近期")],
+        all_buckets=[],
+        window_hours=48,
+        connection_hint="",
+        crystal_hint="",
+        core_context=[core],
+    )
+    assert "=== 核心准则目录 ===" in result
+    assert "📌 [core-a] 门在我这边" in result
+    assert "核心正文不应出现在目录里" not in result
+    assert "=== 核心准则参考 ===" not in result
