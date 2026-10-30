@@ -66,6 +66,21 @@ class FootprintSnapshot:
             compact = [compact[0], "…", *compact[-2:]]
         return "👣 Footprint：" + " → ".join(compact)
 
+    def last_meaningful_at(self, trace_id: str) -> str:
+        """最近一次有意义事件（创建/改正文/放下/钉选……）的 recorded_at。
+
+        TraceTouched 等技术事件不算——浮现一次不等于「今天碰过它」。
+        没有可用事件时返回空串。
+        """
+        latest = ""
+        for event in self.events_by_trace.get(str(trace_id), ()):
+            if not _event_label(event):
+                continue
+            ts = str(event.get("recorded_at") or "")
+            if ts > latest:
+                latest = ts
+        return latest
+
     def original_kind(self, trace_id: str, metadata: dict | None = None) -> str:
         for event in self.events_by_trace.get(str(trace_id), ()):
             kind = str(event.get("trace_kind") or "").strip().lower()
