@@ -191,3 +191,19 @@ def test_footprint_records_declared_source_and_pin_actors():
     assert snapshot.summary("m2") == (
         "👣 Footprint：用户经用户导入创建 → 用户钉为核心 → LLM解除核心"
     )
+
+
+def test_last_meaningful_at_ignores_touch_events():
+    snapshot = FootprintSnapshot.from_events(
+        [
+            {"trace_id": "p", "event_type": "TraceCreated", "payload": {},
+             "recorded_at": "2026-10-01T00:00:00+00:00"},
+            {"trace_id": "p", "event_type": "TraceUpdated",
+             "payload": {"changed_fields": ["content"]},
+             "recorded_at": "2026-10-20T00:00:00+00:00"},
+            {"trace_id": "p", "event_type": "TraceTouched", "payload": {},
+             "recorded_at": "2026-10-29T00:00:00+00:00"},
+        ]
+    )
+    assert snapshot.last_meaningful_at("p") == "2026-10-20T00:00:00+00:00"
+    assert snapshot.last_meaningful_at("missing") == ""
