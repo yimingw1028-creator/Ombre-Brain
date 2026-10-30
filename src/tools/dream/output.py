@@ -9,7 +9,8 @@ tools/dream/output.py — dream 最终输出格式化
 最终七个板块，按下列顺序输出：
 ① 近期活跃记忆正文（48 小时窗口，排除 pinned/resolved/protected/permanent/
    feel/plan/letter/digested/dont_surface/anchor）
-② 核心准则参考（pinned/permanent，排除 protected）
+② 核心准则目录（pinned/permanent，排除 protected；默认只列标题，
+   surfacing.dream_core_mode: full 时回到全文）
 ③ 你的 active plans
 ④ 你的 feel 历史（按 token 预算折叠老 feel）
 ⑤ connection hint（最相似的一对近期记忆）
@@ -276,8 +277,34 @@ def format_dream_output(
         )
 
     # --- ② 核心准则参考 ---
+    # 默认只给目录：一条 pinned 一行（ID + 名字）。全文每次 breath 已经给过，
+    # dream 里再给一遍只是占预算、把今天的桶挤到后面。
+    # 想回到旧行为：config.yaml 里 surfacing.dream_core_mode: full
     core_context = core_context or []
-    if core_context:
+    core_mode = str(surfacing_cfg.get("dream_core_mode") or "catalog").strip().lower()
+    if core_context and core_mode == "catalog":
+        core_prefix = (
+            "\n\n=== 核心准则目录 ===\n"
+            "pinned/permanent 桶，只列标题。全文每次 breath 开头都会给，这里不再重复。\n\n"
+        )
+        core_lines: list[str] = []
+        core_omitted = 0
+        for b in core_context:
+            meta = b["metadata"]
+            line = f"📌 [{b['id']}] {strip_wikilinks(str(meta.get('name') or b['id']))}"
+            candidate = core_prefix + "\n".join([*core_lines, line])
+            if count_tokens_approx(final_text + candidate) <= dream_budget:
+                core_lines.append(line)
+            else:
+                core_omitted += 1
+        if core_lines:
+            section = core_prefix + "\n".join(core_lines)
+            if core_omitted:
+                notice = f"\n（另有 {core_omitted} 条核心记忆因 dream 总预算未列出。）"
+                if count_tokens_approx(final_text + section + notice) <= dream_budget:
+                    section += notice
+            append_fragment(section)
+    elif core_context:
         core_prefix = (
             "\n\n=== 核心准则参考 ===\n"
             "这些是 pinned/permanent 桶，只作为梦里的边界与背景，不当作普通待消化事项。\n\n"
