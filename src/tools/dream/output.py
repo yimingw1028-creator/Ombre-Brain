@@ -11,7 +11,8 @@ tools/dream/output.py — dream 最终输出格式化
    feel/plan/letter/digested/dont_surface/anchor）
 ② 核心准则目录（pinned/permanent，排除 protected；默认只列标题，
    surfacing.dream_core_mode: full 时回到全文）
-③ 你的 active plans
+③ 你的 active plans（默认只展开窗口内动过的，其余一行标题；
+   surfacing.dream_plan_mode: full 时回到全文）
 ④ 你的 feel 历史（按 token 预算折叠老 feel）
 ⑤ connection hint（最相似的一对近期记忆）
 ⑥ crystal hint（低频触发：feel 聚成一簇 5 条才提示一次）
@@ -41,9 +42,11 @@ tools/dream/output.py — dream 最终输出格式化
 ========================================
 """
 
+from datetime import datetime, timedelta
+
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
-from utils import count_tokens_approx, parse_bool, strip_wikilinks
+from utils import count_tokens_approx, parse_bool, parse_iso_datetime, strip_wikilinks
 
 
 def _content_of(bucket: dict) -> str:
@@ -338,6 +341,9 @@ def format_dream_output(
             append_fragment(section)
 
     # --- ③ active plan 段 ---
+    # 默认（touched）：窗口内动过的 plan 给全文，用来勾掉/更新；其余只列一行标题。
+    # 全部 plan 的全文已经挪到 breath 开头（往前看）。
+    # 想回到旧行为：config.yaml 里 surfacing.dream_plan_mode: full
     try:
         plans_active = [
             b for b in all_buckets
@@ -349,7 +355,80 @@ def format_dream_output(
             )
         ]
         plans_active.sort(key=lambda b: b["metadata"].get("created", ""), reverse=True)
-        if plans_active:
+        plan_mode = str(surfacing_cfg.get("dream_plan_mode") or "touched").strip().lower()
+        if plans_active and plan_mode != "full":
+            cutoff = datetime.now() - timedelta(hours=window_hours)
+
+            def _touched(p: dict) -> bool:
+                # last_active 会被 breath_search 命中时的 touch 刷新，而被翻到一眼
+                # 不算「动过」；所以优先看足迹里最近一次有意义事件，足迹读不到
+                # 时才退回 last_active。
+                pmeta = p.get("metadata") or {}
+                stamps = [pmeta.get("created")]
+                if footprint_snapshot is not None:
+                    try:
+                        stamps.append(footprint_snapshot.last_meaningful_at(p["id"]))
+                    except Exception:
+                        stamps.append(pmeta.get("last_active"))
+                else:
+                    stamps.append(pmeta.get("last_active"))
+                for ts in stamps:
+                    if not ts:
+                        continue
+                    try:
+                        if parse_iso_datetime(ts) >= cutoff:
+                            return True
+                    except (ValueError, TypeError):
+                        continue
+                return False
+
+            touched = [p for p in plans_active if _touched(p)]
+            others = [p for p in plans_active if not _touched(p)]
+            plan_prefix = (
+                f"\n\n=== 你的 active plans（过去 {window_hours} 小时动过的给全文）===\n"
+                "完成了用 trace(bucket_id, status=\"resolved\")，\n"
+                "放弃了用 trace(bucket_id, status=\"abandoned\")，需要修改用 trace(bucket_id, content=\"...\")。\n"
+                "所有 plan 的全文每次 breath 开头都会给，这里只展开最近动过的。\n\n"
+            )
+            plan_lines: list[str] = []
+            plan_omitted = 0
+            for p in touched:
+                pcreated = p["metadata"].get("created", "")[:10]
+                block = _bucket_data_block(
+                    p,
+                    display_prefix=f"[{p['id']}] {pcreated} ",
+                    footprint=_footprint(p),
+                )
+                candidate = plan_prefix + "\n".join([*plan_lines, block])
+                if count_tokens_approx(final_text + candidate) <= dream_budget:
+                    plan_lines.append(block)
+                else:
+                    plan_omitted += 1
+            if not touched:
+                plan_lines.append("（这段时间没有动过任何 plan。）")
+            title_lines: list[str] = []
+            for p in others:
+                pcreated = p["metadata"].get("created", "")[:10]
+                first = strip_wikilinks(_content_of(p)).strip().split("\n", 1)[0]
+                snippet = first[:50] + ("…" if len(first) > 50 else "")
+                line = f"· [{p['id']}] {pcreated} {snippet}"
+                candidate = (
+                    plan_prefix + "\n".join(plan_lines)
+                    + "\n\n其余 active plan：\n" + "\n".join([*title_lines, line])
+                )
+                if count_tokens_approx(final_text + candidate) <= dream_budget:
+                    title_lines.append(line)
+                else:
+                    plan_omitted += 1
+            section = plan_prefix + "\n".join(plan_lines)
+            if title_lines:
+                section += "\n\n其余 active plan：\n" + "\n".join(title_lines)
+            if plan_omitted:
+                notice = f"\n\n（另有 {plan_omitted} 条 active plan 因 dream 总预算未展开。）"
+                if count_tokens_approx(final_text + section + notice) <= dream_budget:
+                    section += notice
+            append_fragment(section)
+        elif plans_active:
             plan_prefix = (
                 "\n\n=== 你的 active plans ===\n"
                 "这些是你当前未完成的计划/承诺。完成了用 trace(bucket_id, status=\"resolved\")，\n"
