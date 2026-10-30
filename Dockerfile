@@ -50,6 +50,9 @@ RUN pip install --no-cache-dir --retries 10 --timeout 120 \
 # eMudhra 证书事件（2026-10）：单独升级 certifi，锁文件更新前的临时补丁
 RUN pip install --no-cache-dir --upgrade "certifi>=2026.10.19"
 
+# PyJWT CVE-2026-102266（2026-09）：mcp 带进来的依赖，OB 自己不用 JWT 鉴权，属于顺手清理；锁文件更新到 >=2.14.0 后删掉这行
+RUN pip install --no-cache-dir --upgrade "pyjwt>=2.14.0"
+
 # Copy project files / 复制项目文件
 COPY src/ ./src/
 COPY frontend/ ./frontend/

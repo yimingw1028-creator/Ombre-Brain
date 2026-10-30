@@ -31,6 +31,7 @@ from typing import Optional
 from .. import _runtime as rt
 from .._common import check_metadata_size
 from ..plan.core import is_letter_bucket, letter_lock_state
+from errors import safe_error_detail
 
 
 async def anchor_set(bucket_id: str) -> str:
@@ -70,7 +71,7 @@ async def pulse(include_archive: Optional[bool] = False) -> str:
     try:
         stats = await rt.bucket_mgr.get_stats()
     except Exception as e:
-        return f"获取系统状态失败: {e}"
+        return f"获取系统状态失败: {safe_error_detail(e)}"
 
     status = (
         f"=== 我现在的记忆 ===\n"

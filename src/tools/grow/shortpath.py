@@ -24,9 +24,9 @@ import asyncio
 import uuid
 
 try:
-    from errors import PublicToolError
+    from errors import llm_step_failed_error
 except ImportError:  # pragma: no cover - 包内导入兜底
-    from ...errors import PublicToolError  # type: ignore
+    from ...errors import llm_step_failed_error  # type: ignore
 
 from .. import _runtime as rt
 from .._common import merge_or_create, check_duplicate_for, check_plan_resolution
@@ -41,9 +41,9 @@ async def grow_shortpath(content: str, test_data: bool = False) -> str:
             "grow short analysis failed: err_type=%s detail=hidden",
             type(e).__name__,
         )
-        raise PublicToolError(
-            "API key 未配置或调用失败，打标无法完成，桶未创建。"
-            "请检查 OMBRE_COMPRESS_API_KEY。"
+        raise llm_step_failed_error(
+            "打标",
+            api_available=getattr(rt.dehydrator, "api_available", True),
         ) from e
     importance = analysis.get("importance", 5) if isinstance(analysis.get("importance"), int) else 5
     # iter 2.0：短路径也是一次 grow 调用 → 仍生成 batch_id，便于 dashboard 聚合，
