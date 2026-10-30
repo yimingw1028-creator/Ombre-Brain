@@ -18,7 +18,8 @@ tools/breath/surface.py — 无 query 浮现模式
 
 不做什么（边界）：
 - 不调用 touch()：浮现不能重置衰减计时器
-- 不返回 feel / plan / letter / archived（专用通道有自己的入口）
+- 不返回 feel / letter / archived（专用通道有自己的入口）
+- active plan 例外（二改）：紧跟核心准则单独一段，独立预算 breath_plan_max_tokens
 - 不做关键词检索（那是 search.py 的事）
 
 对外暴露：surface_default(max_results, max_tokens, tag_filter) → str
@@ -32,7 +33,7 @@ from datetime import datetime, timedelta
 from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
-from utils import parse_bool, parse_iso_datetime
+from utils import parse_bool, parse_iso_datetime, strip_wikilinks
 from ._verbatim import render_stored_bucket
 
 # U-07 fix: throttle the sampling-fallback INFO log to once per 5 minutes.
@@ -120,6 +121,48 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             token_budget -= entry_tokens
         except Exception as e:
             rt.logger.warning(f"Failed to render pinned bucket / 钉选桶渲染失败: {e}")
+
+    # --- active plans（往前看）---
+    # 二改：plan 全文放在 breath 开头、紧跟核心准则。用独立预算
+    # surfacing.breath_plan_max_tokens（默认 4000），不挤占浮现记忆的预算；
+    # 设成 0 关掉这一段。放不下全文的 plan 退成一行标题，不截断正文。
+    plan_results: list[str] = []
+    plan_title_lines: list[str] = []
+    try:
+        try:
+            plan_budget = int(surfacing_cfg.get("breath_plan_max_tokens", 4000))
+        except (TypeError, ValueError, OverflowError):
+            plan_budget = 4000
+        plan_budget = max(0, min(20_000, plan_budget))
+        if plan_budget > 0:
+            active_plans = [
+                b for b in all_buckets
+                if b["metadata"].get("type") == "plan"
+                and not is_letter_bucket(b)
+                and b["metadata"].get("status", "active") == "active"
+                and not parse_bool(b["metadata"].get("protected"), default=False)
+            ]
+            active_plans.sort(
+                key=lambda b: b["metadata"].get("created", ""), reverse=True
+            )
+            for b in active_plans:
+                created = str(b["metadata"].get("created", ""))[:10]
+                rendered, entry_tokens = render_stored_bucket(
+                    b,
+                    f"🧭 [计划] [bucket_id:{b['id']}] {created}",
+                    _footprint(b),
+                )
+                if entry_tokens <= plan_budget:
+                    plan_results.append(rendered)
+                    plan_budget -= entry_tokens
+                    continue
+                first = strip_wikilinks(str(b.get("content") or "")).strip().split("\n", 1)[0]
+                line = f"🧭 [bucket_id:{b['id']}] {created} {first[:50]}" + (
+                    "…" if len(first) > 50 else ""
+                )
+                plan_title_lines.append(line)
+    except Exception as e:
+        rt.logger.warning(f"Breath active plans block failed / 计划段失败: {e}")
 
     # --- iter 2.0: anchor 桶在默认浮现模式的 *未解决池* 不出现（anchor 是坐标系不是浮现对象）---
     # anchor 过滤仅作用于 unresolved 候选，不影响 pinned 提取（上方已完成）。
@@ -364,6 +407,15 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
         parts.append(core_filter_notice)
     if pinned_results:
         parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
+    if plan_results or plan_title_lines:
+        plan_block = "=== 我的计划（往前看）===\n" + "\n---\n".join(plan_results)
+        if plan_title_lines:
+            plan_block += (
+                ("\n\n" if plan_results else "")
+                + "（计划段预算放不下全文，只列标题：）\n"
+                + "\n".join(plan_title_lines)
+            )
+        parts.append(plan_block)
     if dynamic_results:
         parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
     if passive_results:
