@@ -89,7 +89,13 @@ def test_every_persisted_dream_surface_is_shown_verbatim_without_changing_legal_
     monkeypatch.setattr(
         dream_output.rt,
         "config",
-        {"surfacing": {"feel_max_tokens": 10_000, "dream_core_mode": "full"}},
+        {
+            "surfacing": {
+                "feel_max_tokens": 10_000,
+                "dream_core_mode": "full",
+                "dream_plan_mode": "full",
+            }
+        },
     )
     recent_body = "\n recent [[正文]] 尾部空格  "
     core_body = "  core [[正文]]\n"
@@ -287,3 +293,29 @@ def test_core_context_defaults_to_title_catalog(monkeypatch):
     assert "📌 [core-a] 门在我这边" in result
     assert "核心正文不应出现在目录里" not in result
     assert "=== 核心准则参考 ===" not in result
+
+
+def test_plans_default_to_full_text_only_when_touched_in_window(monkeypatch):
+    """默认：窗口内动过的 plan 给全文，其余只列一行标题。"""
+    from datetime import datetime, timedelta
+
+    monkeypatch.setattr(dream_output.rt, "config", {})
+    fresh = (datetime.now() - timedelta(hours=1)).isoformat(timespec="seconds")
+    touched = _bucket(
+        "plan-touched", "今天动过的计划\n第二行细节", "plan",
+        status="active", created=fresh, last_active=fresh,
+    )
+    stale = _bucket(
+        "plan-stale", "很久没动的计划\n第二行不该出现", "plan", status="active",
+    )
+    result = dream_output.format_dream_output(
+        recent=[_bucket("recent", "近期")],
+        all_buckets=[touched, stale],
+        window_hours=48,
+        connection_hint="",
+        crystal_hint="",
+    )
+    assert "今天动过的计划\n第二行细节" in result
+    assert "其余 active plan：" in result
+    assert "[plan-stale] 2026-07-15 很久没动的计划" in result
+    assert "第二行不该出现" not in result
