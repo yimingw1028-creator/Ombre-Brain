@@ -3476,6 +3476,11 @@ class BucketManager:
                         bucket["vector_match"] = True
                     else:
                         bucket.pop("vector_match", None)
+                    # 二改第 4 刀：把「这条是怎么命中的」带给调用方。
+                    # breath_search 据此决定这次命中算不算「想起」，
+                    # 混合分凑过线的弱命中不该刷新活跃时间。
+                    bucket["literal_hit"] = bool(literal_hit)
+                    bucket["semantic_score"] = semantic_score
                     scored.append(bucket)
             except Exception as e:
                 logger.warning(
