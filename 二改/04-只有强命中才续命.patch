@@ -1,0 +1,295 @@
+diff --git a/src/bucket_manager.py b/src/bucket_manager.py
+index 73ebe07..15d968e 100644
+--- a/src/bucket_manager.py
++++ b/src/bucket_manager.py
+@@ -3476,6 +3476,11 @@ class BucketManager:
+                         bucket["vector_match"] = True
+                     else:
+                         bucket.pop("vector_match", None)
++                    # 二改第 4 刀：把「这条是怎么命中的」带给调用方。
++                    # breath_search 据此决定这次命中算不算「想起」，
++                    # 混合分凑过线的弱命中不该刷新活跃时间。
++                    bucket["literal_hit"] = bool(literal_hit)
++                    bucket["semantic_score"] = semantic_score
+                     scored.append(bucket)
+             except Exception as e:
+                 logger.warning(
+diff --git a/src/tools/breath/search.py b/src/tools/breath/search.py
+index a5885bc..00cf96f 100644
+--- a/src/tools/breath/search.py
++++ b/src/tools/breath/search.py
+@@ -199,6 +199,62 @@ def _semantic_diagnostics(
+     }
+ 
+ 
++# ---------------------------------------------------------
++# 二改第 4 刀：只有强命中才续命
++# 原行为：breath_search 返回的每一条都会 touch（刷新 last_active、次数 +1），
++# 包括只靠混合分凑过线、或只是语义沾边的弱命中。衰减分的新鲜度加成和
++# dream 的「最近」窗口都看 last_active，于是一次没搜准的搜索会把一批不相干的
++# 旧桶当成「刚发生的」，塞进当晚的 dream 和第二天的 breath。
++# 现在：弱命中照样返回给模型看，但不动它的时间和次数。
++# 开关：config.yaml 里 surfacing.touch_mode: all → 回到原行为。
++# ---------------------------------------------------------
++_TOUCH_SEMANTIC_MIN_DEFAULT = 0.75
++
++
++def _touch_policy() -> tuple[str, float]:
++    """读取续命策略：(mode, semantic_min)。"""
++    surfacing = (getattr(rt, "config", None) or {}).get("surfacing") or {}
++    mode = str(surfacing.get("touch_mode") or "strong").strip().lower()
++    if mode not in ("strong", "all"):
++        mode = "strong"
++    try:
++        semantic_min = float(
++            surfacing.get("touch_semantic_min", _TOUCH_SEMANTIC_MIN_DEFAULT)
++        )
++    except (TypeError, ValueError):
++        semantic_min = _TOUCH_SEMANTIC_MIN_DEFAULT
++    return mode, min(1.0, max(0.0, semantic_min))
++
++
++def _counts_as_recall(bucket: dict, mode: str, semantic_min: float) -> bool:
++    """这条命中算不算「想起」。
++
++    算：查询串原样出现在桶里（literal_hit），或语义相似度 >= semantic_min。
++    不算：只靠时间/重要度/被碰次数把混合分凑过线的，和语义只是沾边的。
++    检索层没有给出这两个字段时（旧的或第三方 manager），保持原行为。
++    """
++    if mode == "all":
++        return True
++    if "literal_hit" not in bucket and "semantic_score" not in bucket:
++        return True
++    if bucket.get("literal_hit"):
++        return True
++    score = bucket.get("semantic_score")
++    try:
++        return score is not None and float(score) >= semantic_min
++    except (TypeError, ValueError):
++        return False
++
++
++def _similarity_tag(bucket: dict) -> str:
++    """给 [语义关联] 的头部补上相似度，方便以后校准门槛。"""
++    score = bucket.get("semantic_score")
++    try:
++        return f" [相似度:{float(score):.2f}]" if score is not None else ""
++    except (TypeError, ValueError):
++        return ""
++
++
+ async def surface_search(
+     query: str,
+     max_results: int,
+@@ -365,6 +421,7 @@ async def surface_search(
+     token_used = 0
+     budget_blocked = False
+     touched_ids: list = []   # 性能 P2：浮现后统一在后台 touch，不在响应路径逐条 await
++    touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
+     for bucket in matches:
+         meta = bucket["metadata"]
+         bucket_id = bucket["id"]
+@@ -381,7 +438,7 @@ async def surface_search(
+                 bucket, header, _footprint(bucket)
+             )
+         elif bucket.get("vector_match"):
+-            header = f"[语义关联] [bucket_id:{bucket_id}]"
++            header = f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]"
+             rendered, entry_tokens = render_stored_bucket(
+                 bucket, header, _footprint(bucket)
+             )
+@@ -395,7 +452,9 @@ async def surface_search(
+             break
+         results.append(rendered)
+         token_used += entry_tokens
+-        if not _is_archived(bucket):
++        if not _is_archived(bucket) and _counts_as_recall(
++            bucket, touch_mode, touch_semantic_min
++        ):
+             touched_ids.append(bucket_id)
+ 
+     # 性能 P2：把 touch 移出响应路径 —— 浮现完的桶在后台一次性更新激活，
+diff --git a/tests/test_touch_strong_hit.py b/tests/test_touch_strong_hit.py
+new file mode 100644
+index 0000000..632135a
+--- /dev/null
++++ b/tests/test_touch_strong_hit.py
+@@ -0,0 +1,178 @@
++"""二改第 4 刀：只有强命中才续命。
++
++breath_search 返回的桶里，只有「查询串原样命中」或「语义相似度够高」的才会被
++touch（刷新 last_active、次数 +1）。靠混合分凑过线的弱命中、语义只是沾边的命中，
++照样返回给模型看，但不动它的时间——否则一次没搜准的搜索会把一批不相干的旧桶
++当成「刚发生的」，塞进当晚的 dream 和第二天的 breath。
++"""
++
++import asyncio
++from unittest.mock import MagicMock
++
++import pytest
++
++import tools._runtime as rt
++from tools.breath import dispatch
++from tools.breath.search import _counts_as_recall
++
++
++class DisabledEmbedding:
++    enabled = False
++
++
++class NoopDecay:
++    is_running = True
++
++    async def ensure_started(self):
++        return None
++
++    def calculate_score(self, metadata):
++        return float(metadata.get("importance") or 0)
++
++
++class FlaggedBucketManager:
++    """模拟检索层：每条结果都带着 literal_hit / semantic_score。"""
++
++    def __init__(self, buckets):
++        self.buckets = list(buckets)
++        self.touched = []
++
++    async def get(self, _bucket_id):
++        return None
++
++    async def search(self, _query, **_kwargs):
++        return list(self.buckets)
++
++    async def list_all(self, include_archive=False):
++        return list(self.buckets)
++
++    async def touch_many(self, bucket_ids, ripple=False):
++        assert ripple is False
++        self.touched.extend(bucket_ids)
++
++
++def _bucket(bucket_id, content, *, literal_hit, semantic_score, vector_match=False):
++    bucket = {
++        "id": bucket_id,
++        "content": content,
++        "literal_hit": literal_hit,
++        "semantic_score": semantic_score,
++        "metadata": {
++            "name": bucket_id,
++            "type": "dynamic",
++            "importance": 5,
++            "domain": ["回归测试"],
++            "created": "2026-07-19T12:00:00",
++        },
++    }
++    if vector_match:
++        bucket["vector_match"] = True
++    return bucket
++
++
++def _install_runtime(monkeypatch, manager, surfacing=None):
++    monkeypatch.setattr(rt, "config", {"surfacing": dict(surfacing or {})})
++    monkeypatch.setattr(rt, "bucket_mgr", manager)
++    monkeypatch.setattr(rt, "decay_engine", NoopDecay())
++    monkeypatch.setattr(rt, "dehydrator", MagicMock())
++    monkeypatch.setattr(rt, "embedding_engine", DisabledEmbedding())
++    monkeypatch.setattr(rt, "logger", MagicMock())
++    monkeypatch.setattr(rt, "fire_webhook", None)
++    monkeypatch.setattr(rt, "mark_op", None)
++    monkeypatch.setattr(rt, "record_v3_tool_event", lambda *_a, **_k: None)
++    monkeypatch.setattr("tools.breath.search.random.random", lambda: 1.0)
++
++
++def _four_kinds():
++    return [
++        _bucket("literal", "正文里原样写着跳舞。", literal_hit=True, semantic_score=None),
++        _bucket(
++            "strong-semantic", "语义很近的一条。",
++            literal_hit=False, semantic_score=0.82, vector_match=True,
++        ),
++        _bucket(
++            "weak-semantic", "语义只是沾边的一条。",
++            literal_hit=False, semantic_score=0.67, vector_match=True,
++        ),
++        _bucket("blended-only", "靠混合分凑过线的一条。", literal_hit=False, semantic_score=0.31),
++    ]
++
++
++@pytest.mark.asyncio
++async def test_only_strong_hits_are_touched_but_all_are_returned(monkeypatch):
++    manager = FlaggedBucketManager(_four_kinds())
++    _install_runtime(monkeypatch, manager)
++
++    output = await dispatch(query="跳舞", max_results=10, max_tokens=6000)
++    await asyncio.sleep(0)
++
++    # 四条都照样返回给模型看
++    for bucket_id in ("literal", "strong-semantic", "weak-semantic", "blended-only"):
++        assert f"[bucket_id:{bucket_id}]" in output
++    # 只有字面命中和强语义命中被续命
++    assert manager.touched == ["literal", "strong-semantic"]
++
++
++@pytest.mark.asyncio
++async def test_semantic_header_shows_similarity(monkeypatch):
++    manager = FlaggedBucketManager(_four_kinds())
++    _install_runtime(monkeypatch, manager)
++
++    output = await dispatch(query="跳舞", max_results=10, max_tokens=6000)
++    await asyncio.sleep(0)
++
++    assert "[语义关联] [相似度:0.82] [bucket_id:strong-semantic]" in output
++    assert "[语义关联] [相似度:0.67] [bucket_id:weak-semantic]" in output
++
++
++@pytest.mark.asyncio
++async def test_touch_mode_all_restores_original_behaviour(monkeypatch):
++    manager = FlaggedBucketManager(_four_kinds())
++    _install_runtime(monkeypatch, manager, surfacing={"touch_mode": "all"})
++
++    await dispatch(query="跳舞", max_results=10, max_tokens=6000)
++    await asyncio.sleep(0)
++
++    assert manager.touched == [
++        "literal", "strong-semantic", "weak-semantic", "blended-only",
++    ]
++
++
++@pytest.mark.asyncio
++async def test_touch_semantic_min_is_configurable(monkeypatch):
++    manager = FlaggedBucketManager(_four_kinds())
++    _install_runtime(monkeypatch, manager, surfacing={"touch_semantic_min": 0.65})
++
++    await dispatch(query="跳舞", max_results=10, max_tokens=6000)
++    await asyncio.sleep(0)
++
++    assert manager.touched == ["literal", "strong-semantic", "weak-semantic"]
++
++
++def test_counts_as_recall_rules():
++    strong = ("strong", 0.75)
++    assert _counts_as_recall({"literal_hit": True, "semantic_score": None}, *strong)
++    assert _counts_as_recall({"literal_hit": False, "semantic_score": 0.75}, *strong)
++    assert not _counts_as_recall({"literal_hit": False, "semantic_score": 0.74}, *strong)
++    assert not _counts_as_recall({"literal_hit": False, "semantic_score": None}, *strong)
++    assert not _counts_as_recall({"literal_hit": False, "semantic_score": "坏值"}, *strong)
++    # 检索层没给这两个字段（旧的或第三方 manager）→ 保持原行为
++    assert _counts_as_recall({"id": "legacy"}, *strong)
++    # 开关退回原样
++    assert _counts_as_recall({"literal_hit": False, "semantic_score": 0.1}, "all", 0.75)
++
++
++@pytest.mark.asyncio
++async def test_real_search_marks_literal_hits(bucket_mgr):
++    """真实检索层要把 literal_hit 带出来，上面的规则才有东西可看。"""
++    bucket_id = await bucket_mgr.create(
++        content="2026-11-12 June 跳完舞回来，老师说她对 4 Walls 太熟反而抢拍。",
++        name="抢拍",
++        domain=["回归测试"],
++    )
++
++    hits = await bucket_mgr.search("抢拍", limit=5)
++
++    hit = next(b for b in hits if b["id"] == bucket_id)
++    assert hit["literal_hit"] is True
++    assert "semantic_score" in hit
