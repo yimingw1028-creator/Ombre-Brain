@@ -199,6 +199,62 @@ def _semantic_diagnostics(
     }
 
 
+# ---------------------------------------------------------
+# 二改第 4 刀：只有强命中才续命
+# 原行为：breath_search 返回的每一条都会 touch（刷新 last_active、次数 +1），
+# 包括只靠混合分凑过线、或只是语义沾边的弱命中。衰减分的新鲜度加成和
+# dream 的「最近」窗口都看 last_active，于是一次没搜准的搜索会把一批不相干的
+# 旧桶当成「刚发生的」，塞进当晚的 dream 和第二天的 breath。
+# 现在：弱命中照样返回给模型看，但不动它的时间和次数。
+# 开关：config.yaml 里 surfacing.touch_mode: all → 回到原行为。
+# ---------------------------------------------------------
+_TOUCH_SEMANTIC_MIN_DEFAULT = 0.75
+
+
+def _touch_policy() -> tuple[str, float]:
+    """读取续命策略：(mode, semantic_min)。"""
+    surfacing = (getattr(rt, "config", None) or {}).get("surfacing") or {}
+    mode = str(surfacing.get("touch_mode") or "strong").strip().lower()
+    if mode not in ("strong", "all"):
+        mode = "strong"
+    try:
+        semantic_min = float(
+            surfacing.get("touch_semantic_min", _TOUCH_SEMANTIC_MIN_DEFAULT)
+        )
+    except (TypeError, ValueError):
+        semantic_min = _TOUCH_SEMANTIC_MIN_DEFAULT
+    return mode, min(1.0, max(0.0, semantic_min))
+
+
+def _counts_as_recall(bucket: dict, mode: str, semantic_min: float) -> bool:
+    """这条命中算不算「想起」。
+
+    算：查询串原样出现在桶里（literal_hit），或语义相似度 >= semantic_min。
+    不算：只靠时间/重要度/被碰次数把混合分凑过线的，和语义只是沾边的。
+    检索层没有给出这两个字段时（旧的或第三方 manager），保持原行为。
+    """
+    if mode == "all":
+        return True
+    if "literal_hit" not in bucket and "semantic_score" not in bucket:
+        return True
+    if bucket.get("literal_hit"):
+        return True
+    score = bucket.get("semantic_score")
+    try:
+        return score is not None and float(score) >= semantic_min
+    except (TypeError, ValueError):
+        return False
+
+
+def _similarity_tag(bucket: dict) -> str:
+    """给 [语义关联] 的头部补上相似度，方便以后校准门槛。"""
+    score = bucket.get("semantic_score")
+    try:
+        return f" [相似度:{float(score):.2f}]" if score is not None else ""
+    except (TypeError, ValueError):
+        return ""
+
+
 async def surface_search(
     query: str,
     max_results: int,
@@ -365,6 +421,7 @@ async def surface_search(
     token_used = 0
     budget_blocked = False
     touched_ids: list = []   # 性能 P2：浮现后统一在后台 touch，不在响应路径逐条 await
+    touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
     for bucket in matches:
         meta = bucket["metadata"]
         bucket_id = bucket["id"]
@@ -381,7 +438,7 @@ async def surface_search(
                 bucket, header, _footprint(bucket)
             )
         elif bucket.get("vector_match"):
-            header = f"[语义关联] [bucket_id:{bucket_id}]"
+            header = f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]"
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
@@ -395,7 +452,9 @@ async def surface_search(
             break
         results.append(rendered)
         token_used += entry_tokens
-        if not _is_archived(bucket):
+        if not _is_archived(bucket) and _counts_as_recall(
+            bucket, touch_mode, touch_semantic_min
+        ):
             touched_ids.append(bucket_id)
 
     # 性能 P2：把 touch 移出响应路径 —— 浮现完的桶在后台一次性更新激活，
