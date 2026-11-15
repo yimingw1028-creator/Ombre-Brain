@@ -10,6 +10,9 @@ decay_engine.py — 记忆衰减引擎，模拟人类遗忘曲线
 - 打分公式（改进版艾宾浩斯 + 情感坐标）：
     Score = Importance × (activation_count^0.3) × e^(-λ×days) × emotion_weight
 - 情感权重 = base + arousal × arousal_boost；唤醒度高的记忆衰减得慢
+- 两只钟（二改第 5 刀）：指数衰减 e^(-λ×days) 看「多久没动」（last_active），
+  新鲜度加成和短期/长期分支看「多久前发生」（created）。被想起只让一条
+  记忆不沉下去，不让它重新变成新事。decay.freshness_clock: active → 回到旧行为
 - anchor / pinned / protected 桶不参与衰减、不被归档
 - ensure_started() 幂等启动后台循环；可被测试 monkeypatch 成 noop
 
@@ -62,6 +65,14 @@ _BACKFILL_MAX_PER_CYCLE = 50
 # --- Freshness bonus：bonus = 1 + e^(-hours/HALF_LIFE) ---
 _FRESHNESS_HALF_LIFE_HRS = 36.0  # 36h 半衰：刚存 ×2.0，36h 后 ×1.5，72h 后 ≈×1.14
 _FRESHNESS_AMPLITUDE = 1.0       # bonus 上限增量（0 → 无加成；1 → 最多 ×2）
+
+# --- 二改第 5 刀：新鲜度看哪只钟（config.yaml 的 decay.freshness_clock）---
+# created：新鲜度加成、短期/长期分支按创建时间算（默认）。
+# active ：按上次激活时间算，即上游原行为；被搜到一次就重新变成"刚发生的"。
+# 指数衰减 e^(-λ×days) 不受这个开关影响，一直按上次激活时间算。
+_FRESHNESS_CLOCK_CREATED = "created"
+_FRESHNESS_CLOCK_ACTIVE = "active"
+_FRESHNESS_CLOCK_DEFAULT = _FRESHNESS_CLOCK_CREATED
 
 # --- 短期 vs 长期权重分配（核心心理模型）---
 # 短期：刚发生的事 time 占主导（"印象很新"）
@@ -120,6 +131,29 @@ def _days_since_active(meta: dict, fallback_days: float = _DEFAULT_DAYS_FALLBACK
         return float(fallback_days)
 
 
+def _days_since_created(meta: dict) -> float | None:
+    """从 metadata 解析"距创建的天数"。二改第 5 刀用它算新鲜度。
+
+    和 _days_since_active 的区别：这里只认 created，不看 last_active，
+    所以被搜索命中、被 touch 都不会让它变小。
+
+    边界：
+      * meta 不是 dict / created 缺失 / 无法解析 → 返回 None，
+        由调用方退回按 last_active 算（等于这条桶保持旧行为）
+      * 永远返回 ≥ 0 的浮点数（防止时钟漂移产生负数）
+    """
+    if not isinstance(meta, dict):
+        return None
+    raw = meta.get("created") or ""
+    if not raw:
+        return None
+    try:
+        created = parse_iso_datetime(raw)
+        return max(0.0, (datetime.now() - created).total_seconds() / _SECONDS_PER_DAY)
+    except (ValueError, TypeError):
+        return None
+
+
 class DecayEngine:
     """
     Memory decay engine — periodically scans all dynamic buckets,
@@ -141,6 +175,12 @@ class DecayEngine:
         emotion_cfg = decay_cfg.get("emotion_weights", {})
         self.emotion_base = emotion_cfg.get("base", _DEFAULT_EMOTION_BASE)
         self.arousal_boost = emotion_cfg.get("arousal_boost", _DEFAULT_AROUSAL_BOOST)
+
+        # --- 二改第 5 刀：新鲜度看哪只钟；认不出的值一律当默认 ---
+        clock = str(decay_cfg.get("freshness_clock") or _FRESHNESS_CLOCK_DEFAULT).strip().lower()
+        if clock not in (_FRESHNESS_CLOCK_CREATED, _FRESHNESS_CLOCK_ACTIVE):
+            clock = _FRESHNESS_CLOCK_DEFAULT
+        self.freshness_clock = clock
 
         self.bucket_mgr = bucket_mgr
 
@@ -188,6 +228,10 @@ class DecayEngine:
         - Long-term (>3 days): emotion_weight dominates, time decays to floor
         短期（≤3天）：时间权重主导，情感放大
         长期（>3天）：情感权重主导，时间衰减到底线
+
+        二改第 5 刀：这里的"3 天"和新鲜度加成按创建时间算（发生了多久），
+        指数衰减按上次激活时间算（多久没动）。被想起的旧桶不会沉，
+        但也不会重新拿到"刚发生"的加成。
         """
         if not isinstance(metadata, dict):
             return 0.0
@@ -225,13 +269,22 @@ class DecayEngine:
             arousal = _DEFAULT_AROUSAL
         emotion_weight = self.emotion_base + arousal * self.arousal_boost
 
+        # --- Days since it happened（二改第 5 刀）---
+        # 新鲜度和短期/长期分支用这只钟。created 读不到时退回 days_since；
+        # created 比 last_active 还新属于脏数据，取两者中较大的，同样等于旧行为。
+        fresh_days = days_since
+        if self.freshness_clock == _FRESHNESS_CLOCK_CREATED:
+            age_days = _days_since_created(metadata)
+            if age_days is not None:
+                fresh_days = max(age_days, days_since)
+
         # --- Time weight ---
-        time_weight = self._calc_time_weight(days_since)
+        time_weight = self._calc_time_weight(fresh_days)
 
         # --- Short-term vs Long-term weight separation ---
         # 短期（≤3天）：time_weight 占 70%，emotion 占 30%
         # 长期（>3天）：emotion 占 70%，time_weight 占 30%
-        if days_since <= _SHORT_TERM_DAYS:
+        if fresh_days <= _SHORT_TERM_DAYS:
             # Short-term: time dominates, emotion amplifies
             combined_weight = (
                 time_weight * _SHORT_TERM_TIME_RATIO
