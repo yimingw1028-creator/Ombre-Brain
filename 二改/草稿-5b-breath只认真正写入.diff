@@ -1,0 +1,401 @@
+diff --git a/src/tools/breath/surface.py b/src/tools/breath/surface.py
+index e30524f..b51f6d5 100644
+--- a/src/tools/breath/surface.py
++++ b/src/tools/breath/surface.py
+@@ -12,6 +12,9 @@ tools/breath/surface.py — 无 query 浮现模式
+ - 通过主动浮现策略的 pinned/permanent 桶作为「核心准则」置顶
+ - protected 只防衰减，不进入核心准则、未解决池、被动联想或偶遇池
+ - 未解决桶按 calculate_score 排序；冷启动桶（从未访问且 importance>=8）插队前 2
++- 二改 5b：排序用的分数只认"真正写入"的时间（_surface_score）：创建、hold/grow
++  把新内容并进来、从归档里主动恢复。被搜索命中只让桶不归档，不让它在这里
++  往前排。surfacing.breath_score_clock: active → 旧行为
+ - 配置开关 surfacing.sampling.enabled 启用后做加权无放回采样，否则
+   保留 top1 + top20 内随机洗牌
+ - 末尾 1~2 条「久未浮现」passive association（imp>=8 且未访问 / imp>=9 且 7 天未活跃）
+@@ -64,6 +67,83 @@ def _budget_notice(*, omitted: int, used: int, limit: int) -> str:
+     return _BUDGET_NOTICE.format(omitted=omitted, used=used, limit=limit)
+ 
+ 
++# --- 二改 5b：breath 排序看哪只钟 ---
++# created（默认）：浮现分 = 把这条桶当作"从上次真正写入之后没人碰过"来算的衰减分。
++#   做法是算分前把 last_active 换成"最近一次真正写入的时间"；公式仍是
++#   decay_engine 那一条，重要度、情绪、被想起次数照常算数。
++#   真正写入 = 创建；hold/grow 把新内容并进这条桶；从归档里主动恢复。
++#   被 breath_search 命中（touch）不算。
++# active：直接用衰减分，即 5b 之前的行为。
++# 归档只看 decay_engine 自己的分数，不经过这里，所以续命照样防归档。
++_BREATH_CLOCK_CREATED = "created"
++_BREATH_CLOCK_ACTIVE = "active"
++
++
++def _breath_score_clock(surfacing_cfg: dict) -> str:
++    clock = str(
++        (surfacing_cfg or {}).get("breath_score_clock") or _BREATH_CLOCK_CREATED
++    ).strip().lower()
++    if clock not in (_BREATH_CLOCK_CREATED, _BREATH_CLOCK_ACTIVE):
++        return _BREATH_CLOCK_CREATED
++    return clock
++
++
++def _last_written_at(footprint_snapshot, bucket_id: str) -> str:
++    """足迹里这条桶最近一次"真正写入"的时间；没有或读不到时返回空串。
++
++    只认三种事件：创建（TraceCreated）、hold/grow 合并进来（TraceUpdated 且
++    changed_fields 里有 last_merged_by）、从归档恢复（TraceRestored）。
++    TraceTouched（被搜索命中）和纯元数据修改都不算。
++    """
++    if footprint_snapshot is None:
++        return ""
++    try:
++        events = footprint_snapshot.events_by_trace.get(str(bucket_id), ())
++    except Exception:
++        return ""
++    latest = None
++    latest_raw = ""
++    for event in events:
++        if not isinstance(event, dict):
++            continue
++        event_type = str(event.get("event_type") or "")
++        if event_type == "TraceUpdated":
++            payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
++            fields = {str(item) for item in payload.get("changed_fields") or []}
++            if "last_merged_by" not in fields:
++                continue
++        elif event_type not in ("TraceCreated", "TraceRestored"):
++            continue
++        raw = str(event.get("recorded_at") or "")
++        try:
++            stamp = parse_iso_datetime(raw)
++        except (ValueError, TypeError):
++            continue
++        if latest is None or stamp > latest:
++            latest, latest_raw = stamp, raw
++    return latest_raw
++
++
++def _surface_score(meta: dict, clock: str, written_at: str = "") -> float:
++    """breath 浮现段排序、采样、显示用的分数。
++
++    written_at：_last_written_at() 给出的时间，比 created 新时才采用。
++    created 缺失时退回原衰减分（这条桶保持旧行为）。不修改传入的 meta。
++    """
++    if clock == _BREATH_CLOCK_CREATED and isinstance(meta, dict):
++        created = meta.get("created")
++        if created:
++            stamp = created
++            if written_at:
++                try:
++                    if parse_iso_datetime(written_at) > parse_iso_datetime(created):
++                        stamp = written_at
++                except (ValueError, TypeError):
++                    stamp = created
++            meta = {**meta, "last_active": stamp}
++    return rt.decay_engine.calculate_score(meta)
++
++
+ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -> str:
+     try:
+         all_buckets = await rt.bucket_mgr.list_all(include_archive=False)
+@@ -72,6 +152,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+         return "记忆系统暂时无法访问。"
+ 
+     surfacing_cfg = rt.config.get("surfacing", {}) or {}
++    score_clock = _breath_score_clock(surfacing_cfg)   # 二改 5b
+     try:
+         footprint_snapshot = rt.bucket_mgr.footprint_snapshot()
+     except Exception as exc:
+@@ -85,6 +166,13 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+             str(bucket.get("id") or ""), bucket.get("metadata", {})
+         )
+ 
++    def _score(bucket: dict) -> float:
++        """二改 5b：这次 breath 里所有排序、采样、显示都用这一个分数。"""
++        written_at = ""
++        if score_clock == _BREATH_CLOCK_CREATED:
++            written_at = _last_written_at(footprint_snapshot, str(bucket.get("id") or ""))
++        return _surface_score(bucket.get("metadata", {}), score_clock, written_at)
++
+     # --- pinned/permanent 桶置顶（protected 仅防衰减，不主动浮现）---
+     # 排除 letter 桶：letter 的 importance=10 不代表核心准则。
+     # pinned 与 anchor 在正常写入路径互斥：钉选会清除 anchor，设 anchor 会拒绝 pinned 桶。
+@@ -189,13 +277,13 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+ 
+     def _sort_key(b: dict):
+         """F-05: 二级排序 key，消除同分时浮现随机抖动。
+-        主键：decay_score（降序）
++        主键：浮现分（降序；二改 5b，见 _surface_score）
+         次键：last_active 时间戳（越新越高）
+         三键：arousal × valence（情感强度，越高越先浮现）
+         四键：importance
+         """
+         meta = b["metadata"]
+-        score = rt.decay_engine.calculate_score(meta)
++        score = _score(b)
+         try:
+             last_ts = parse_iso_datetime(
+                 meta.get("last_active") or meta.get("created", "")
+@@ -214,7 +302,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     scored = sorted(unresolved, key=_sort_key, reverse=True)
+ 
+     if scored:
+-        top_scores = [(b["metadata"].get("name", b["id"]), rt.decay_engine.calculate_score(b["metadata"])) for b in scored[:5]]
++        top_scores = [(b["metadata"].get("name", b["id"]), _score(b)) for b in scored[:5]]
+         rt.logger.info(f"Top unresolved scores: {top_scores}")
+ 
+     # --- 冷启动检测 ---
+@@ -241,7 +329,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+         pool = non_cold[:max(top_k, sample_k)]
+         try:
+             weights = [
+-                max(0.0001, rt.decay_engine.calculate_score(b["metadata"])) ** (1.0 / temperature)
++                max(0.0001, _score(b)) ** (1.0 / temperature)
+                 for b in pool
+             ]
+             picked = []
+@@ -283,7 +371,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     dynamic_results = []
+     for b in candidates:
+         try:
+-            score = rt.decay_engine.calculate_score(b["metadata"])
++            score = _score(b)
+             rendered, entry_tokens = render_stored_bucket(
+                 b,
+                 f"[权重:{score:.2f}] [bucket_id:{b['id']}]",
+diff --git a/tests/test_breath_score_clock.py b/tests/test_breath_score_clock.py
+new file mode 100644
+index 0000000..6825ee4
+--- /dev/null
++++ b/tests/test_breath_score_clock.py
+@@ -0,0 +1,232 @@
++"""二改 5b：搜索不影响 breath。
++
++第 5 刀之后，被搜中的旧桶不再拿新鲜度加成，但"刚被碰过"和"被想起次数"
++仍然让它的衰减分高过大多数新桶。衰减分决定归档，这是续命该有的效果；
++问题只在 breath 的浮现段也用同一个分数排序。
++
++5b 让 breath 用自己的浮现分：同一条公式，时间一律按创建时间算。
++归档那边的分数不变。
++"""
++
++import asyncio
++from datetime import datetime, timedelta, timezone
++from unittest.mock import MagicMock
++
++import pytest
++
++import tools._runtime as rt
++from decay_engine import DecayEngine
++from tools.breath.surface import (
++    _breath_score_clock,
++    _last_written_at,
++    _surface_score,
++    surface_default,
++)
++
++
++class FakeSnapshot:
++    """只带 surface.py 用到的两样：events_by_trace 和 summary()。"""
++
++    def __init__(self, events_by_trace):
++        self.events_by_trace = dict(events_by_trace)
++
++    def summary(self, _trace_id, _metadata=None):
++        return "👣 Footprint：测试"
++
++
++class ListOnlyBucketManager:
++    def __init__(self, buckets, events_by_trace=None):
++        self.buckets = list(buckets)
++        self.events_by_trace = events_by_trace
++
++    async def list_all(self, include_archive=False):
++        return list(self.buckets)
++
++    def footprint_snapshot(self):
++        if self.events_by_trace is None:
++            raise RuntimeError("no footprint in this test")
++        return FakeSnapshot(self.events_by_trace)
++
++    async def get_stats(self):
++        return {"permanent_count": 0, "dynamic_count": len(self.buckets)}
++
++
++def _bucket(bucket_id, *, age_days, idle_days, count=1, importance=7, content=None):
++    now = datetime.now()
++    return {
++        "id": bucket_id,
++        "content": content or f"正文 {bucket_id}",
++        "metadata": {
++            "id": bucket_id,
++            "name": bucket_id,
++            "type": "dynamic",
++            "importance": importance,
++            "activation_count": count,
++            "arousal": 0.5,
++            "valence": 0.5,
++            "tags": [],
++            "domain": [],
++            "created": (now - timedelta(days=age_days)).isoformat(),
++            "last_active": (now - timedelta(days=idle_days)).isoformat(),
++        },
++    }
++
++
++def _event(event_type, *, days_ago, changed_fields=None):
++    stamp = datetime.now(timezone.utc) - timedelta(days=days_ago)
++    payload = {"changed_fields": list(changed_fields)} if changed_fields else {}
++    return {"event_type": event_type, "recorded_at": stamp.isoformat(), "payload": payload}
++
++
++def _install(buckets, surfacing=None, events_by_trace=None):
++    rt.config = {"surfacing": dict(surfacing or {})}
++    rt.bucket_mgr = ListOnlyBucketManager(buckets, events_by_trace)
++    rt.decay_engine = DecayEngine({}, bucket_mgr=None)
++    rt.logger = MagicMock()
++    rt.mark_op = None
++
++
++def _surfaced_ids(text):
++    block = text.split("=== 浮现记忆 ===", 1)[1] if "=== 浮现记忆 ===" in text else ""
++    block = block.split("\n\n=== ", 1)[0]
++    return [seg.split("]", 1)[0] for seg in block.split("[bucket_id:")[1:]]
++
++
++def test_clock_config_parsing():
++    assert _breath_score_clock({}) == "created"
++    assert _breath_score_clock(None) == "created"
++    assert _breath_score_clock({"breath_score_clock": "ACTIVE "}) == "active"
++    assert _breath_score_clock({"breath_score_clock": "nonsense"}) == "created"
++
++
++def test_surface_score_ignores_touch_but_decay_score_does_not():
++    """一个月前的桶今天被搜中、累计 3 次：归档分很高，浮现分很低。"""
++    _install([])
++    meta = _bucket("old", age_days=30, idle_days=0, count=3)["metadata"]
++    before = dict(meta)
++    decay = rt.decay_engine.calculate_score(meta)
++    surface = _surface_score(meta, "created")
++    assert decay == pytest.approx(12.46, abs=0.05)
++    assert surface == pytest.approx(2.78, abs=0.05)
++    assert decay > rt.decay_engine.threshold * 10      # 续命照样防归档
++    assert _surface_score(meta, "active") == decay     # 开关退回旧行为
++    assert meta == before                              # 不改传入的 metadata
++
++
++def test_untouched_bucket_has_same_score_under_both_clocks():
++    _install([])
++    for days in (0, 1, 2, 5, 30):
++        meta = _bucket("b", age_days=days, idle_days=days)["metadata"]
++        assert _surface_score(meta, "created") == pytest.approx(
++            _surface_score(meta, "active"), rel=1e-3
++        )
++
++
++def test_missing_created_falls_back_to_decay_score():
++    _install([])
++    meta = _bucket("b", age_days=30, idle_days=0, count=3)["metadata"]
++    del meta["created"]
++    assert _surface_score(meta, "created") == rt.decay_engine.calculate_score(meta)
++
++
++def test_searched_old_buckets_no_longer_crowd_out_recent_ones():
++    """20 个位置：20 条这三天新写的桶，20 条昨天被搜中的旧桶。
++
++    默认（created）：浮现的 20 条全是新桶。
++    旧行为（active）：20 条旧桶把新桶全部挤掉。
++    （breath 会把第 2 到 20 名打乱，所以只比较"谁进了这 20 条"，不比较顺序。）
++    """
++    recent = [_bucket(f"new{i:02d}", age_days=0.5 + i * 0.12, idle_days=0.5 + i * 0.12) for i in range(20)]
++    searched = [
++        _bucket(f"old{i:02d}", age_days=30 + i, idle_days=1, count=4) for i in range(20)
++    ]
++
++    _install(recent + searched)
++    result = asyncio.run(surface_default(max_results=20, max_tokens=100000, tag_filter=[]))
++    assert sorted(_surfaced_ids(result)) == sorted(b["id"] for b in recent)
++
++    _install(recent + searched, {"breath_score_clock": "active"})
++    result = asyncio.run(surface_default(max_results=20, max_tokens=100000, tag_filter=[]))
++    assert sorted(_surfaced_ids(result)) == sorted(b["id"] for b in searched)
++
++
++def test_importance_still_matters():
++    """不是按日期排序：五天前的重要度 9 仍排在昨天的重要度 4 前面。"""
++    _install([
++        _bucket("important", age_days=5, idle_days=5, importance=9),
++        _bucket("trivial", age_days=1, idle_days=1, importance=4),
++    ])
++    result = asyncio.run(surface_default(max_results=1, max_tokens=10000, tag_filter=[]))
++    assert _surfaced_ids(result) == ["important"]
++
++
++def test_displayed_weight_is_the_surface_score():
++    _install([_bucket("old", age_days=30, idle_days=0, count=3)])
++    result = asyncio.run(surface_default(max_results=5, max_tokens=10000, tag_filter=[]))
++    assert "[权重:2.78] [bucket_id:old]" in result
++
++
++# ---------------------------------------------------------------
++# 写入照旧算数：今天的内容被并进旧桶时，那条旧桶仍然要在 breath 里出现
++# ---------------------------------------------------------------
++
++def test_last_written_at_only_counts_real_writes():
++    events = {
++        "b": (
++            _event("TraceCreated", days_ago=30),
++            _event("TraceUpdated", days_ago=9, changed_fields=["content", "last_merged_by"]),
++            _event("TraceUpdated", days_ago=2, changed_fields=["importance"]),   # 改元数据
++            _event("TraceUpdated", days_ago=1, changed_fields=["content"]),      # trace 改正文
++            _event("TraceTouched", days_ago=0),                                  # 被搜到
++        ),
++        "restored": (
++            _event("TraceCreated", days_ago=80),
++            _event("TraceArchived", days_ago=20),
++            _event("TraceRestored", days_ago=1),
++        ),
++    }
++    snap = FakeSnapshot(events)
++    assert _last_written_at(snap, "b") == events["b"][1]["recorded_at"]
++    assert _last_written_at(snap, "restored") == events["restored"][2]["recorded_at"]
++    assert _last_written_at(snap, "unknown") == ""
++    assert _last_written_at(None, "b") == ""
++    assert _last_written_at(object(), "b") == ""          # 形状不对的快照不报错
++
++
++def test_surface_score_uses_merge_time_when_newer_than_created():
++    _install([])
++    meta = _bucket("old", age_days=30, idle_days=0, count=3)["metadata"]
++    merged_today = _event("TraceUpdated", days_ago=0, changed_fields=["last_merged_by"])["recorded_at"]
++    # 今天有新内容并进来：和"今天被搜到"的归档分一样（12.46），不是 2.78
++    assert _surface_score(meta, "created", merged_today) == pytest.approx(12.46, abs=0.05)
++    # 写入时间比 created 还早、或者是坏数据：按 created 算
++    stale = _event("TraceCreated", days_ago=45)["recorded_at"]
++    assert _surface_score(meta, "created", stale) == pytest.approx(2.78, abs=0.05)
++    assert _surface_score(meta, "created", "garbage") == pytest.approx(2.78, abs=0.05)
++
++
++def test_old_bucket_merged_into_today_still_surfaces_but_searched_one_does_not():
++    """20 个位置，19 条这三天的新桶，外加两条一个月前的旧桶：
++
++    merged：今天 hold 的内容被并了进去（足迹里有"事件补充"）→ 要出现。
++    searched：今天只是被搜到（足迹里只有 TraceTouched）→ 不出现。
++    """
++    recent = [_bucket(f"new{i:02d}", age_days=0.5 + i * 0.12, idle_days=0.5 + i * 0.12) for i in range(19)]
++    merged = _bucket("merged", age_days=30, idle_days=0, count=2)
++    searched = _bucket("searched", age_days=30, idle_days=0, count=2)
++    events = {
++        "merged": (
++            _event("TraceCreated", days_ago=30),
++            _event("TraceUpdated", days_ago=0, changed_fields=["content", "last_merged_by"]),
++        ),
++        "searched": (
++            _event("TraceCreated", days_ago=30),
++            _event("TraceTouched", days_ago=0),
++        ),
++    }
++    _install(recent + [merged, searched], events_by_trace=events)
++    result = asyncio.run(surface_default(max_results=20, max_tokens=100000, tag_filter=[]))
++    surfaced = _surfaced_ids(result)
++    assert "merged" in surfaced
++    assert "searched" not in surfaced
++    assert len(surfaced) == 20
