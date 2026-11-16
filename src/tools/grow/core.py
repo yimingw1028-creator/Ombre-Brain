@@ -43,6 +43,7 @@ from .._common import (
     check_grow_items_payload,
     check_duplicate_for,
     check_plan_resolution,
+    is_exact_duplicate_notice,
 )
 
 
@@ -99,7 +100,9 @@ async def grow_core(content: str, test_data: bool = False) -> str:
             return {"line": f"⚠️{item.get('name', '?')}"}
         return {
             "line": (
-                f"📎{result_name}" if is_merged
+                # 二改第 7 刀：逐字相同、没有写入的那条单独标出来
+                f"＝已存在 {result_name}" if is_exact_duplicate_notice(embed_warn)
+                else f"📎{result_name}" if is_merged
                 else f"📝{item.get('name', result_name)}"
             ),
             "merged": is_merged,
@@ -279,7 +282,12 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
             rt.logger.warning(f"grow items 条目处理失败 / verbatim item failed: {e}")
             return {"line": "⚠️"}
         return {
-            "line": f"📎{result_name}" if is_merged else f"📝{result_name}",
+            "line": (
+                # 二改第 7 刀：逐字相同、没有写入的那条单独标出来
+                f"＝已存在 {result_name}" if is_exact_duplicate_notice(embed_warn)
+                else f"📎{result_name}" if is_merged
+                else f"📝{result_name}"
+            ),
             "merged": is_merged,
             "embed_warn": embed_warn,
             "dup_check": None if is_merged else (result_name, content_str),

@@ -336,6 +336,8 @@ async def test_candidate_not_rendered_is_not_counted_as_witnessed(env, monkeypat
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_pending_candidate_is_never_a_merge_target(env, monkeypatch):
     """hold 写入的普通记忆不能被合并进待沉淀候选，改写它的正文。"""
     from tools import _common

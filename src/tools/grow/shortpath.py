@@ -29,7 +29,10 @@ except ImportError:  # pragma: no cover - 包内导入兜底
     from ...errors import llm_step_failed_error  # type: ignore
 
 from .. import _runtime as rt
-from .._common import merge_or_create, check_duplicate_for, check_plan_resolution
+from .._common import (
+    merge_or_create, check_duplicate_for, check_plan_resolution,
+    is_exact_duplicate_notice,
+)
 
 
 async def grow_shortpath(content: str, test_data: bool = False) -> str:
@@ -64,6 +67,8 @@ async def grow_shortpath(content: str, test_data: bool = False) -> str:
         test_data=test_data,
     )
     action = "合并" if is_merged else "新建"
+    if is_exact_duplicate_notice(embed_warn):
+        action = "已存在"   # 二改第 7 刀：逐字相同，没有写入
     asyncio.create_task(check_plan_resolution(content, source_bucket_id=result_name))
     if not is_merged:
         asyncio.create_task(check_duplicate_for(result_name, content.strip()))

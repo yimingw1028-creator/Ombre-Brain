@@ -40,6 +40,17 @@ sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 
 @pytest.fixture
+def auto_merge_on(monkeypatch):
+    """二改第 7 刀：自动合并默认关。专门测合并路径的测试用这个把它打开。
+
+    用法：@pytest.mark.usefixtures("auto_merge_on")
+    """
+    from tools import _common
+
+    monkeypatch.setattr(_common, "_AUTO_MERGE_DEFAULT", True)
+
+
+@pytest.fixture
 def test_config(tmp_path):
     """
     Minimal config pointing to a temp directory.

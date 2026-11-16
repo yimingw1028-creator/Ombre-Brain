@@ -169,6 +169,8 @@ async def test_dict_item_stores_explicit_why_remembered_on_first_create(grow_rt)
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
     bucket_mgr, _stub = grow_rt
 
@@ -203,6 +205,8 @@ async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
     bucket_mgr, stub = grow_rt
     content = "短内容二次命中同一事件"
@@ -258,6 +262,8 @@ async def test_digest_merge_never_overwrites_existing_why_remembered(grow_rt):
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_items_merge_fills_empty_why_once_and_preserves_it(grow_rt):
     bucket_mgr, _stub = grow_rt
     event_content = "items 二次写入命中的同一个具体事件。"
@@ -286,6 +292,8 @@ async def test_items_merge_fills_empty_why_once_and_preserves_it(grow_rt):
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_concurrent_trace_why_wins_over_stale_grow_merge(
     grow_rt, monkeypatch
 ):

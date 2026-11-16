@@ -132,6 +132,8 @@ async def test_bucket_update_normalizes_string_false(tmp_path):
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_merge_updates_embedding_exactly_once(tmp_path, monkeypatch):
     engine = _CountingEmbedding()
     manager = BucketManager(

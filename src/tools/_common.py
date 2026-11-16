@@ -98,6 +98,21 @@ _PLAN_FALLBACK_CAP = 10                # 无向量时直接送 LLM 的 plan 上�
 # 开关：config.yaml 里 plan.auto_resolve: true → 回到原行为。
 _PLAN_AUTO_RESOLVE_DEFAULT = False
 
+# --- 二改第 7 刀：自动合并的开关 ---
+# 原行为：hold / grow 写入前先搜一条最像的旧桶，分数过线、小模型又判成「同一
+# 事件」时，新内容不单独成桶，而是追加（hold）或压缩改写（grow）进旧桶，顺带用
+# 新标题覆盖旧标题、情绪值取平均。合并目标没有排除 plan 和 feel。
+# 现在：默认不合并，hold / grow 一律新建，一件事一个桶。想把进展补进旧桶，
+# 由写入的一方自己用 trace 做。
+# 例外：正文和某条已有的桶逐字相同时不新建也不改旧桶，只在返回里说明——
+# 这是重试 / 并发重复提交的保护，不是合并。
+# 开关：config.yaml 里 merge.auto: true → 回到原行为。
+_AUTO_MERGE_DEFAULT = False
+_EXACT_DUPLICATE_NOTICE = (
+    "正文与这条已有的桶逐字相同：没有重复写入，原桶也没有被改动。"
+    "这次带的 tags / importance / 标题没有生效，需要的话用 trace 改。"
+)
+
 # --- 字段截断长度（下游存储 / 日志可读性）---
 _RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
 _LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
@@ -846,6 +861,9 @@ async def merge_or_create(
 
     # identical-content、merge-target 与 quota turns 都已释放。独立/兼容
     # 运行时即使需要同步调用 provider，也不能继续占用这些写入协调锁。
+    # 二改第 7 刀：逐字重复、什么都没写的那条路不需要重建索引。
+    if result[2] is _EXACT_DUPLICATE_NOTICE:
+        return result
     post_index = getattr(rt.bucket_mgr, "_index_after_update", None)
     if callable(post_index) and result[0]:
         await post_index(
@@ -882,11 +900,15 @@ async def _merge_or_create_inner(
         merge_why_remembered or ""
     ).strip()[:_WHY_REMEMBERED_MAX_CHARS]
     exact_storage_match = False
-    try:
-        existing = await rt.bucket_mgr.search(content, limit=1, domain_filter=domain or None)
-    except Exception as e:
-        rt.logger.warning(f"Search for merge failed, creating new / 合并搜索失败，新建: {e}")
-        existing = []
+    # 二改第 7 刀：自动合并关着时不去搜合并目标。
+    auto_merge = auto_merge_enabled()
+    existing = []
+    if auto_merge:
+        try:
+            existing = await rt.bucket_mgr.search(content, limit=1, domain_filter=domain or None)
+        except Exception as e:
+            rt.logger.warning(f"Search for merge failed, creating new / 合并搜索失败，新建: {e}")
+            existing = []
 
     # Cache invalidation and a concurrent list_all() refresh can cross: an old
     # parsed snapshot may briefly hide a bucket that is already durable on disk.
@@ -907,7 +929,23 @@ async def _merge_or_create_inner(
                 existing = [exact]
                 exact_storage_match = True
 
-    merge_threshold = rt.config.get("merge_threshold") or 75
+    # 二改第 7 刀：自动合并关着时，只保留「逐字相同就不重复写」这一条保护。
+    # 不新建、不改旧桶、不续命；返回旧桶 ID，并在第三个返回值里说明。
+    # 旧桶已归档 / 已删除时不算，照常新建一条活的。测试桶沿用原规则，照常新建。
+    if not auto_merge:
+        if exact_storage_match and not test_data:
+            duplicate = existing[0]
+            duplicate_meta = duplicate.get("metadata", {})
+            duplicate_id = str(duplicate.get("id") or "").strip()
+            if duplicate_id and not is_terminal_memory_metadata(duplicate_meta):
+                rt.logger.info(
+                    "op=merge_or_create phase=branch branch=exact_duplicate "
+                    f"bucket_id={duplicate_id} source_tool={source_tool or '_'}"
+                )
+                return duplicate_id, True, _EXACT_DUPLICATE_NOTICE
+        existing = []
+
+    merge_threshold = (getattr(rt, "config", None) or {}).get("merge_threshold") or 75
     if (
         not test_data
         and existing
@@ -1331,17 +1369,35 @@ async def _rank_active_plans_by_query(
     ]
 
 
-def plan_auto_resolve_enabled() -> bool:
-    """读取 plan.auto_resolve 开关。读不到、写错了都按默认（关）处理。"""
-    plan_cfg = (getattr(rt, "config", None) or {}).get("plan")
-    if not isinstance(plan_cfg, dict):
-        return _PLAN_AUTO_RESOLVE_DEFAULT
-    value = plan_cfg.get("auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
+def _config_flag(section: str, key: str, default: bool) -> bool:
+    """读 config 里 section.key 这个布尔开关。读不到、写错了都按 default。"""
+    section_cfg = (getattr(rt, "config", None) or {}).get(section)
+    if not isinstance(section_cfg, dict):
+        return default
+    value = section_cfg.get(key, default)
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
-    return _PLAN_AUTO_RESOLVE_DEFAULT
+    return default
+
+
+def is_exact_duplicate_notice(warning: object) -> bool:
+    """merge_or_create 的第三个返回值是不是「逐字相同、没有写入」那句说明。
+
+    hold / grow 用它把返回里的「合并」换成「已存在」——那条路什么都没合并。
+    """
+    return isinstance(warning, str) and warning == _EXACT_DUPLICATE_NOTICE
+
+
+def auto_merge_enabled() -> bool:
+    """读取 merge.auto 开关（二改第 7 刀）。默认关。"""
+    return _config_flag("merge", "auto", _AUTO_MERGE_DEFAULT)
+
+
+def plan_auto_resolve_enabled() -> bool:
+    """读取 plan.auto_resolve 开关。读不到、写错了都按默认（关）处理。"""
+    return _config_flag("plan", "auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
 
 
 async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:

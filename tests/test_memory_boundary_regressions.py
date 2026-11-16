@@ -159,6 +159,8 @@ async def test_bucket_manager_hold_fallback_keeps_markdown_without_embedding(tmp
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_hold_merge_appends_raw_text_and_never_calls_llm_merge(tmp_path, monkeypatch):
     manager = BucketManager(
         {"buckets_dir": str(tmp_path / "vault")}, embedding_engine=None

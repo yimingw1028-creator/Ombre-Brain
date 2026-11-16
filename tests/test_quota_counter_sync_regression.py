@@ -273,6 +273,8 @@ async def test_trace_restore_dirty_protected_anchor_requires_atomic_unprotect(
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_concurrent_merge_promotions_preserve_both_events_and_one_slot(
     bucket_mgr,
     monkeypatch,

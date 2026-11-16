@@ -407,6 +407,8 @@ async def test_cancelled_provider_wait_releases_derived_lease(
 
 
 @pytest.mark.asyncio
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_hold_merge_releases_bucket_turn_before_derived_index(
     bucket_mgr,
     monkeypatch,

@@ -494,6 +494,8 @@ async def test_background_indexing_never_blocks_markdown_write(tmp_path):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("preexisting", [False, True], ids=["create", "merge"])
+# 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+@pytest.mark.usefixtures("auto_merge_on")
 async def test_merge_or_create_returns_while_embedding_worker_is_blocked(
     tmp_path,
     monkeypatch,
