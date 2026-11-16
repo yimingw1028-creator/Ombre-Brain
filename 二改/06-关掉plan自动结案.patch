@@ -1,0 +1,352 @@
+diff --git a/src/bucket_manager.py b/src/bucket_manager.py
+index 15d968e..a07f35e 100644
+--- a/src/bucket_manager.py
++++ b/src/bucket_manager.py
+@@ -2476,6 +2476,16 @@ class BucketManager:
+         # 这一组字段没有「校验/转换」逻辑，给什么写什么。新增字段往这个元组里加即可。
+         # iter 1.7 §G3 在这里加入了 "change_log"——plan 桶的状态/编辑历史 list[dict]，
+         # 由 server.py 的 plan() / trace() / /api/plans/{id}/action 维护，bucket_manager 不参与生成。
++        # 二改第 6 刀：status 被设成 active 时，清掉上一次结案留下的
++        # resolved_by / resolution_reason。原来重新激活不清它们，下次显式结案
++        # 会顺着旧的 resolved_by 把一条无关的记忆连带标成 resolved。
++        # 不看原来的 status：对一条本来就是 active 的 plan 再设一次 active，
++        # 也会清掉残留值，这样清理旧数据时不必先把它关掉。
++        # 调用方在同一次 update 里显式传了这两个字段时，以调用方为准。
++        if str(kwargs.get("status") or "").strip().lower() == "active":
++            for stale_key in ("resolved_by", "resolution_reason"):
++                if stale_key not in kwargs:
++                    post.metadata.pop(stale_key, None)
+         for k in ("status", "type", "resolution_reason", "resolved_by",
+                   "related_bucket", "author", "user_name", "letter_date",
+                   "lock_type", "unlock_date", "locked_by", "lock_owner_source", "writer_name",
+diff --git a/src/server.py b/src/server.py
+index cf68388..64cf35a 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -979,7 +979,7 @@ async def plan(
+     weight: Optional[float] = 0.5,
+     why_remembered: Optional[str] = "",
+ ) -> str:
+-    """登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减、不出现在普通 breath,仅在 dream 末尾的 active 段返回;后续 hold/grow 写入新事件时系统自动判断已登记的 plan 是否完成。"""
++    """登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减;所有 active plan 的全文出现在 breath 开头的计划段,dream 里只展开最近改动过的、其余列标题。plan 不会被系统自动结案:完成了用 trace(bucket_id, status="resolved"),放下了用 trace(bucket_id, status="abandoned")。"""
+     return await _with_notice(
+         _t_plan.plan_create(
+             content=content, status=status, related_bucket=related_bucket,
+diff --git a/src/tools/_common.py b/src/tools/_common.py
+index cb2dd8e..2731430 100644
+--- a/src/tools/_common.py
++++ b/src/tools/_common.py
+@@ -90,6 +90,14 @@ _PLAN_LLM_CONFIDENCE_MIN = 0.7         # LLM judgement.confidence 下限
+ _SAME_EVENT_CONFIDENCE_MIN = 0.85      # 自动合并必须高置信，疑似时新建
+ _PLAN_FALLBACK_CAP = 10                # 无向量时直接送 LLM 的 plan 上限（防止过多 LLM 调用）
+ 
++# --- 二改第 6 刀：plan 自动结案的开关 ---
++# 原行为：每次 hold / grow 之后，把 active plan 送给小模型判「是否已完成」，
++# 判中就直接改成 resolved，不写 change_log，也不通知写入的一方。已经实锤
++# 误关过三条 plan。plan 是承诺，漏关一条没什么，错关一条才麻烦。
++# 现在：默认不做自动结案，plan 只由 trace(status=...) 或后台看板显式关闭。
++# 开关：config.yaml 里 plan.auto_resolve: true → 回到原行为。
++_PLAN_AUTO_RESOLVE_DEFAULT = False
++
+ # --- 字段截断长度（下游存储 / 日志可读性）---
+ _RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
+ _LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
+@@ -1323,8 +1331,24 @@ async def _rank_active_plans_by_query(
+     ]
+ 
+ 
++def plan_auto_resolve_enabled() -> bool:
++    """读取 plan.auto_resolve 开关。读不到、写错了都按默认（关）处理。"""
++    plan_cfg = (getattr(rt, "config", None) or {}).get("plan")
++    if not isinstance(plan_cfg, dict):
++        return _PLAN_AUTO_RESOLVE_DEFAULT
++    value = plan_cfg.get("auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, str):
++        return value.strip().lower() in ("1", "true", "yes", "on")
++    return _PLAN_AUTO_RESOLVE_DEFAULT
++
++
+ async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:
+     """新事件触发 active plan 关键词/向量召回，再由 LLM 保守判断是否闭环。"""
++    # 二改第 6 刀：默认关闭。关着的时候不列桶、不搜、不调小模型，直接返回。
++    if not plan_auto_resolve_enabled():
++        return
+     try:
+         from .plan.core import is_letter_bucket
+ 
+diff --git a/tests/test_memory_boundary_regressions.py b/tests/test_memory_boundary_regressions.py
+index 8d0dee8..eb8aad2 100644
+--- a/tests/test_memory_boundary_regressions.py
++++ b/tests/test_memory_boundary_regressions.py
+@@ -70,6 +70,9 @@ async def test_plan_resolution_keyword_fallback_reaches_related_plan_beyond_cap(
+     monkeypatch.setattr(rt, "embedding_engine", None, raising=False)
+     monkeypatch.setattr(rt, "dehydrator", Judge(), raising=False)
+     monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++    # 二改第 6 刀：自动结案默认关闭。这条测试验的是「打开之后」关键词预筛
++    # 能越过上限找到相关 plan，所以先把开关打开。
++    monkeypatch.setattr(rt, "config", {"plan": {"auto_resolve": True}}, raising=False)
+ 
+     await common.check_plan_resolution(
+         "Zeabur 模板已经发布完成", source_bucket_id="event-1"
+diff --git a/tests/test_plan_auto_resolve_switch.py b/tests/test_plan_auto_resolve_switch.py
+new file mode 100644
+index 0000000..7e5a5ee
+--- /dev/null
++++ b/tests/test_plan_auto_resolve_switch.py
+@@ -0,0 +1,254 @@
++"""二改第 6 刀：关掉 plan 自动结案。
++
++原来每次 hold / grow 之后，active plan 会被送给小模型判「是否已完成」，判中就
++直接改成 resolved，不写 change_log，也不通知写入的一方。plan 是承诺，漏关一条
++没什么，错关一条才麻烦，所以默认不再自动结案，只由 trace(status=...) 或后台
++看板显式关闭。
++
++同一刀里：status 被设成 active 时，清掉上一次结案留下的 resolved_by /
++resolution_reason，免得下次显式结案顺着旧值把一条无关的记忆连带标成 resolved。
++"""
++
++import frontmatter as fm
++import pytest
++
++from tools import _common as common
++from tools import _runtime as rt
++
++
++class _Logger:
++    def info(self, *_args, **_kwargs):
++        pass
++
++    def warning(self, *_args, **_kwargs):
++        pass
++
++
++class _SpyManager:
++    """记录 check_plan_resolution 碰过它的每一次调用。"""
++
++    def __init__(self):
++        self.calls = []
++        self.updated = []
++        self.plan = {
++            "id": "plan-1",
++            "content": "周日完成模板发布",
++            "metadata": {"type": "plan", "status": "active"},
++        }
++
++    async def list_all(self, include_archive=False):
++        self.calls.append("list_all")
++        return [self.plan]
++
++    async def search(self, query, limit=None, vector_scores=None):
++        self.calls.append("search")
++        return [self.plan]
++
++    async def update(self, bucket_id, **changes):
++        self.calls.append("update")
++        self.updated.append((bucket_id, changes))
++        return True
++
++
++class _EagerJudge:
++    """不管给什么都说「已完成」的小模型替身。"""
++
++    def __init__(self):
++        self.asked = 0
++
++    async def judge_plan_resolution(self, plan_text, new_event_text):
++        self.asked += 1
++        return {"resolved": True, "confidence": 0.99, "reason": "看起来做完了"}
++
++
++def _wire(monkeypatch, config):
++    manager = _SpyManager()
++    judge = _EagerJudge()
++    monkeypatch.setattr(rt, "bucket_mgr", manager, raising=False)
++    monkeypatch.setattr(rt, "embedding_engine", None, raising=False)
++    monkeypatch.setattr(rt, "dehydrator", judge, raising=False)
++    monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++    monkeypatch.setattr(rt, "config", config, raising=False)
++    return manager, judge
++
++
++# ---------------------------------------------------------
++# 开关
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize(
++    "config",
++    [
++        None,                                   # 没有 config
++        {},                                     # 没有 plan 段
++        {"plan": None},                         # plan 段是空的
++        {"plan": {}},                           # 没写 auto_resolve
++        {"plan": {"auto_resolve": False}},
++        {"plan": {"auto_resolve": "false"}},
++        {"plan": {"auto_resolve": "maybe"}},    # 写错了按关处理
++        {"plan": {"auto_resolve": 1}},          # 只认布尔和明确的字符串
++        {"plan": "true"},                       # 段本身写成了字符串
++    ],
++)
++async def test_auto_resolve_is_off_by_default(monkeypatch, config):
++    manager, judge = _wire(monkeypatch, config)
++
++    await common.check_plan_resolution(
++        "模板已经发布完成，这件事做完了", source_bucket_id="event-1"
++    )
++
++    assert manager.updated == [], "默认不该自动结案"
++    assert judge.asked == 0, "关着的时候不该去问小模型"
++    assert manager.calls == [], "关着的时候连桶都不该列"
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("value", [True, "true", "True", "on", "yes", "1"])
++async def test_auto_resolve_can_be_switched_back_on(monkeypatch, value):
++    manager, judge = _wire(monkeypatch, {"plan": {"auto_resolve": value}})
++
++    await common.check_plan_resolution(
++        "模板已经发布完成，这件事做完了", source_bucket_id="event-1"
++    )
++
++    assert judge.asked == 1
++    assert manager.updated == [(
++        "plan-1",
++        {
++            "status": "resolved",
++            "resolution_reason": "看起来做完了",
++            "resolved_by": "event-1",
++        },
++    )]
++
++
++# ---------------------------------------------------------
++# 重新激活时清掉上一次结案留下的字段
++# ---------------------------------------------------------
++
++def _write_meta(bucket_mgr, bucket_id, **fields):
++    """直接往磁盘上的 frontmatter 里写字段，模拟旧代码留下的残留值。"""
++    fpath = bucket_mgr._find_bucket_file(bucket_id)
++    post = fm.load(fpath)
++    for key, value in fields.items():
++        post[key] = value
++    with open(fpath, "w", encoding="utf-8") as f:
++        f.write(fm.dumps(post))
++
++
++@pytest.mark.asyncio
++async def test_reopening_a_plan_clears_resolution_fields(bucket_mgr):
++    plan_id = await bucket_mgr.create(content="每天出门前挑香水", bucket_type="plan")
++    assert await bucket_mgr.update(
++        plan_id,
++        status="resolved",
++        resolved_by="some-event-bucket",
++        resolution_reason="小模型觉得做完了",
++    )
++    closed = (await bucket_mgr.get(plan_id))["metadata"]
++    assert closed["status"] == "resolved"
++    assert closed["resolved_by"] == "some-event-bucket"
++    assert closed["resolution_reason"] == "小模型觉得做完了"
++
++    assert await bucket_mgr.update(plan_id, status="active")
++
++    reopened = (await bucket_mgr.get(plan_id))["metadata"]
++    assert reopened["status"] == "active"
++    assert "resolved_by" not in reopened
++    assert "resolution_reason" not in reopened
++    assert reopened["type"] == "plan"
++
++
++@pytest.mark.asyncio
++async def test_setting_active_on_an_already_active_plan_clears_stale_fields(bucket_mgr):
++    """旧代码留下的样子：status 是 active，resolved_by 却还指着一条桶。
++
++    清理它不应该要求先把 plan 关掉——关的那一下就会触发联动。
++    """
++    plan_id = await bucket_mgr.create(content="二改慢慢做", bucket_type="plan")
++    _write_meta(
++        bucket_mgr, plan_id,
++        status="active", resolved_by="unrelated-bucket", resolution_reason="旧的理由",
++    )
++    before = (await bucket_mgr.get(plan_id))["metadata"]
++    assert before["resolved_by"] == "unrelated-bucket"
++
++    assert await bucket_mgr.update(plan_id, status="active")
++
++    after = (await bucket_mgr.get(plan_id))["metadata"]
++    assert after["status"] == "active"
++    assert "resolved_by" not in after
++    assert "resolution_reason" not in after
++
++
++@pytest.mark.asyncio
++async def test_resolving_keeps_resolution_fields(bucket_mgr):
++    """对照组：清理只发生在设成 active 的时候，结案和放下都不受影响。"""
++    plan_id = await bucket_mgr.create(content="把月亮要回来", bucket_type="plan")
++    assert await bucket_mgr.update(
++        plan_id, status="resolved", resolved_by="manual", resolution_reason="做完了",
++    )
++    assert await bucket_mgr.update(plan_id, status="abandoned")
++
++    meta = (await bucket_mgr.get(plan_id))["metadata"]
++    assert meta["status"] == "abandoned"
++    assert meta["resolved_by"] == "manual"
++    assert meta["resolution_reason"] == "做完了"
++
++
++@pytest.mark.asyncio
++async def test_other_updates_do_not_touch_resolution_fields(bucket_mgr):
++    """对照组：不带 status 的 update 不清任何东西。"""
++    plan_id = await bucket_mgr.create(content="一条已经关掉的计划", bucket_type="plan")
++    assert await bucket_mgr.update(
++        plan_id, status="resolved", resolved_by="manual", resolution_reason="做完了",
++    )
++    assert await bucket_mgr.update(plan_id, why_remembered="留个底")
++
++    meta = (await bucket_mgr.get(plan_id))["metadata"]
++    assert meta["status"] == "resolved"
++    assert meta["resolved_by"] == "manual"
++    assert meta["resolution_reason"] == "做完了"
++
++
++@pytest.mark.asyncio
++async def test_explicit_fields_win_over_the_cleanup(bucket_mgr):
++    """调用方在同一次 update 里显式传了这两个字段时，以调用方为准。"""
++    plan_id = await bucket_mgr.create(content="迁移脚本会这样写", bucket_type="plan")
++    assert await bucket_mgr.update(
++        plan_id, status="active", resolved_by="kept-on-purpose",
++    )
++
++    meta = (await bucket_mgr.get(plan_id))["metadata"]
++    assert meta["status"] == "active"
++    assert meta["resolved_by"] == "kept-on-purpose"
++    assert "resolution_reason" not in meta
++
++
++@pytest.mark.asyncio
++async def test_reopened_plan_no_longer_drags_an_unrelated_bucket_down(
++    bucket_mgr, monkeypatch,
++):
++    """整条链路：被误关过的 plan 重新打开以后，再显式结案不会连带沉掉旧桶。"""
++    monkeypatch.setattr(rt, "bucket_mgr", bucket_mgr, raising=False)
++    monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++
++    unrelated_id = await bucket_mgr.create(content="2026-11-14 今天挑了地中海花园")
++    plan_id = await bucket_mgr.create(content="Render 和安全那一侧", bucket_type="plan")
++    # 自动结案当年留下的痕迹：resolved_by 指着触发它的那条 hold
++    assert await bucket_mgr.update(
++        plan_id, status="resolved", resolved_by=unrelated_id, resolution_reason="误判",
++    )
++
++    # 发现以后把它打开
++    assert await bucket_mgr.update(plan_id, status="active")
++
++    # 过了很久，这条 plan 真的做完了，显式结案 → 走联动
++    assert await bucket_mgr.update(plan_id, status="resolved")
++    plan_meta = (await bucket_mgr.get(plan_id))["metadata"]
++    linked = await common.cascade_plan_resolved_to_buckets(plan_meta, plan_id)
++
++    assert linked == []
++    unrelated = (await bucket_mgr.get(unrelated_id))["metadata"]
++    assert unrelated.get("resolved") is not True

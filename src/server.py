@@ -979,7 +979,7 @@ async def plan(
     weight: Optional[float] = 0.5,
     why_remembered: Optional[str] = "",
 ) -> str:
-    """登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减、不出现在普通 breath,仅在 dream 末尾的 active 段返回;后续 hold/grow 写入新事件时系统自动判断已登记的 plan 是否完成。"""
+    """登记一个待办/承诺/未闭环事项。status=active(默认)/resolved/abandoned。related_bucket 可选,关联到某个普通记忆桶。weight=承诺重量 0.0-1.0(默认 0.5),与 importance 区分——importance 表示「多重要」、weight 表示「多重」。why_remembered=登记原因(可选、仅展示)。plan 不衰减;所有 active plan 的全文出现在 breath 开头的计划段,dream 里只展开最近改动过的、其余列标题。plan 不会被系统自动结案:完成了用 trace(bucket_id, status="resolved"),放下了用 trace(bucket_id, status="abandoned")。"""
     return await _with_notice(
         _t_plan.plan_create(
             content=content, status=status, related_bucket=related_bucket,

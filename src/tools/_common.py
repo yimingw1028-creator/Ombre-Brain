@@ -90,6 +90,14 @@ _PLAN_LLM_CONFIDENCE_MIN = 0.7         # LLM judgement.confidence 下限
 _SAME_EVENT_CONFIDENCE_MIN = 0.85      # 自动合并必须高置信，疑似时新建
 _PLAN_FALLBACK_CAP = 10                # 无向量时直接送 LLM 的 plan 上限（防止过多 LLM 调用）
 
+# --- 二改第 6 刀：plan 自动结案的开关 ---
+# 原行为：每次 hold / grow 之后，把 active plan 送给小模型判「是否已完成」，
+# 判中就直接改成 resolved，不写 change_log，也不通知写入的一方。已经实锤
+# 误关过三条 plan。plan 是承诺，漏关一条没什么，错关一条才麻烦。
+# 现在：默认不做自动结案，plan 只由 trace(status=...) 或后台看板显式关闭。
+# 开关：config.yaml 里 plan.auto_resolve: true → 回到原行为。
+_PLAN_AUTO_RESOLVE_DEFAULT = False
+
 # --- 字段截断长度（下游存储 / 日志可读性）---
 _RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
 _LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
@@ -1323,8 +1331,24 @@ async def _rank_active_plans_by_query(
     ]
 
 
+def plan_auto_resolve_enabled() -> bool:
+    """读取 plan.auto_resolve 开关。读不到、写错了都按默认（关）处理。"""
+    plan_cfg = (getattr(rt, "config", None) or {}).get("plan")
+    if not isinstance(plan_cfg, dict):
+        return _PLAN_AUTO_RESOLVE_DEFAULT
+    value = plan_cfg.get("auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return _PLAN_AUTO_RESOLVE_DEFAULT
+
+
 async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:
     """新事件触发 active plan 关键词/向量召回，再由 LLM 保守判断是否闭环。"""
+    # 二改第 6 刀：默认关闭。关着的时候不列桶、不搜、不调小模型，直接返回。
+    if not plan_auto_resolve_enabled():
+        return
     try:
         from .plan.core import is_letter_bucket
 

@@ -70,6 +70,9 @@ async def test_plan_resolution_keyword_fallback_reaches_related_plan_beyond_cap(
     monkeypatch.setattr(rt, "embedding_engine", None, raising=False)
     monkeypatch.setattr(rt, "dehydrator", Judge(), raising=False)
     monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
+    # 二改第 6 刀：自动结案默认关闭。这条测试验的是「打开之后」关键词预筛
+    # 能越过上限找到相关 plan，所以先把开关打开。
+    monkeypatch.setattr(rt, "config", {"plan": {"auto_resolve": True}}, raising=False)
 
     await common.check_plan_resolution(
         "Zeabur 模板已经发布完成", source_bucket_id="event-1"

@@ -2476,6 +2476,16 @@ class BucketManager:
         # 这一组字段没有「校验/转换」逻辑，给什么写什么。新增字段往这个元组里加即可。
         # iter 1.7 §G3 在这里加入了 "change_log"——plan 桶的状态/编辑历史 list[dict]，
         # 由 server.py 的 plan() / trace() / /api/plans/{id}/action 维护，bucket_manager 不参与生成。
+        # 二改第 6 刀：status 被设成 active 时，清掉上一次结案留下的
+        # resolved_by / resolution_reason。原来重新激活不清它们，下次显式结案
+        # 会顺着旧的 resolved_by 把一条无关的记忆连带标成 resolved。
+        # 不看原来的 status：对一条本来就是 active 的 plan 再设一次 active，
+        # 也会清掉残留值，这样清理旧数据时不必先把它关掉。
+        # 调用方在同一次 update 里显式传了这两个字段时，以调用方为准。
+        if str(kwargs.get("status") or "").strip().lower() == "active":
+            for stale_key in ("resolved_by", "resolution_reason"):
+                if stale_key not in kwargs:
+                    post.metadata.pop(stale_key, None)
         for k in ("status", "type", "resolution_reason", "resolved_by",
                   "related_bucket", "author", "user_name", "letter_date",
                   "lock_type", "unlock_date", "locked_by", "lock_owner_source", "writer_name",
