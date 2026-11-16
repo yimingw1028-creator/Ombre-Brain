@@ -1,0 +1,285 @@
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR    ombre_brain.github_sync:github_sync.py:540 [github_sync] import failed: '_Any' object does not support the asynchronous context manager protocol
+ERROR tests/test_breath_mcp_compat_regression.py
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_create_feel_bucket
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_feel_crystallization_data
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_feel_in_feel_directory
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_feel_never_decays
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_feel_not_in_search_merge
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_feel_retrieval_by_time
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_source_bucket_marked_digested
+ERROR tests/test_feel_flow.py::TestFeelLifecycle::test_trace_can_modify_feel
+ERROR tests/test_scoring.py::TestDatasetIntegrity::test_all_buckets_created
+ERROR tests/test_scoring.py::TestDatasetIntegrity::test_pinned_exist
+ERROR tests/test_scoring.py::TestDatasetIntegrity::test_type_distribution
+ERROR tests/test_scoring.py::TestDecayScoreOrdering::test_pinned_always_top
+ERROR tests/test_scoring.py::TestDecayScoreOrdering::test_recent_beats_old_same_profile
+ERROR tests/test_scoring.py::TestSearchScoring::test_domain_filter_works
+ERROR tests/test_scoring.py::TestSearchScoring::test_emotion_resonance_scoring
+ERROR tests/test_scoring.py::TestSearchScoring::test_exact_topic_match_ranks_first
+ERROR tests/test_scoring.py::TestSearchScoring::test_resolved_bucket_penalized_in_normalized
+ERROR tests/test_trace_mcp_patch_regression.py
+ERROR tests/test_v3_static_surfaces.py
+FAILED tests/test_code_health_regressions.py::test_ollama_pull_bounds_connection_waits_but_allows_long_stream
+FAILED tests/test_github_backup_manifest.py::test_batch_commit_includes_backup_manifest_without_counting_it
+FAILED tests/test_github_backup_manifest.py::test_import_reads_backup_manifest_summary_when_present
+FAILED tests/test_github_backup_manifest.py::test_import_restores_verified_source_evidence
+FAILED tests/test_github_backup_manifest.py::test_invalid_source_after_bucket_never_overwrites_markdown
+FAILED tests/test_github_backup_manifest.py::test_manifest_reader_rejects_oversized_base64_text
+FAILED tests/test_github_backup_manifest.py::test_restore_detects_dangling_source_references_before_writing[False]
+FAILED tests/test_github_backup_manifest.py::test_restore_detects_dangling_source_references_before_writing[True]
+FAILED tests/test_github_backup_manifest.py::test_restore_manifest_hash_mismatch_does_not_overwrite_local_file
+FAILED tests/test_github_backup_manifest.py::test_restore_rejects_truncated_tree_before_fetching_blobs
+FAILED tests/test_github_sync_long_path.py::test_import_from_github_restores_file_past_windows_max_path
+FAILED tests/test_github_sync_memory_bounds.py::test_batch_commit_bounds_each_tree_request_by_decoded_bytes
+FAILED tests/test_github_sync_memory_bounds.py::test_manifest_payload_limit_fails_before_any_tree_write
+FAILED tests/test_github_sync_zero_commit.py::test_batch_commit_bootstraps_zero_commit_repository
+FAILED tests/test_letter_time_lock.py::test_ai_owner_can_relock_public_letter_through_multiple_cycles
+FAILED tests/test_letter_time_lock.py::test_dashboard_converts_historical_letter_to_ai_owned_lockable_format
+FAILED tests/test_letter_time_lock.py::test_expired_timed_letter_keeps_owner_and_can_be_locked_again
+FAILED tests/test_letter_time_lock.py::test_lock_owner_can_change_every_supported_transition_without_editing_original
+FAILED tests/test_letter_time_lock.py::test_mcp_creates_locked_letter_owned_by_ai_without_echoing_content[permanent]
+FAILED tests/test_letter_time_lock.py::test_mcp_creates_locked_letter_owned_by_ai_without_echoing_content[timed]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[I]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[anchor]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[breath]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[breath_advanced]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[breath_search]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[dream]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[grow]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[hold]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[letter_lock_update]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[letter_read]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[letter_write]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[plan]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[pulse]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[release]
+FAILED tests/test_phase2_web_security.py::test_all_public_mcp_argument_models_forbid_unknown_fields[trace]
+FAILED tests/test_phase2_web_security.py::test_mcp_error_fallback_still_sanitizes_exception_text
+FAILED tests/test_phase2_web_security.py::test_mcp_error_response_never_includes_another_calls_log_tail
+FAILED tests/test_phase2_web_security.py::test_mcp_exception_secrets_never_reach_response_persistence_or_logs
+FAILED tests/test_phase2_web_security.py::test_mcp_operation_logs_never_copy_text_or_control_sequences
+FAILED tests/test_phase2_web_security.py::test_mcp_public_tool_error_returns_only_reviewed_static_message
+FAILED tests/test_phase2_web_security.py::test_webhook_failure_log_does_not_expose_signed_url
+FAILED tests/test_pinned_visibility_regression.py::test_dream_includes_core_bucket_content_as_reference
+FAILED tests/test_server_app.py::test_kelivo_compatible_stateless_json_handshake_lists_all_tools
+FAILED tests/test_server_app.py::test_stdio_mcp_server_resets_existing_boot_marker_after_successful_handshake
+FAILED tests/test_update_integrity.py::test_update_download_stream_enforces_actual_byte_limit
+FAILED tests/test_update_integrity.py::test_update_download_streams_complete_archive_to_disk
+FAILED tests/test_update_manifest_repo_bytes.py::test_shipped_manifest_matches_repository_bytes
+FAILED tests/test_v3_policy_contracts.py::test_policy_package_exports_policy_vm_symbols
+tests/test_adr_requirements_phase20.py exit=0 8 passed
+tests/test_api_timeout_config.py exit=0 4 passed
+tests/test_archive_collision.py exit=0 2 passed
+tests/test_atomic_config_yaml.py exit=0 6 passed
+tests/test_atomic_write.py exit=0 4 passed
+tests/test_auth_input_validation.py exit=0 14 passed
+tests/test_auth_resource_exhaustion.py exit=0 14 passed
+tests/test_auth_state_atomicity.py exit=0 15 passed
+tests/test_auto_merge_switch.py exit=0 19 passed
+tests/test_backup_archive.py exit=0 31 passed
+tests/test_backup_import_safety.py exit=0 3 passed
+tests/test_bm25_async_rebuild.py exit=0 4 passed
+tests/test_bounded_log_tail.py exit=0 3 passed
+tests/test_breath_catalog.py exit=0 9 passed
+tests/test_breath_digested_visibility_regression.py exit=0 5 passed
+tests/test_breath_hook_security.py exit=0 16 passed
+tests/test_breath_mcp_compat_regression.py exit=2 1 error
+tests/test_breath_query_catalog_regression.py exit=0 4 passed
+tests/test_breath_surface_zero_emotion_tiebreak.py exit=0 1 passed
+tests/test_breath_verbatim_patch.py exit=0 9 passed
+tests/test_bucket_concurrency_regression.py exit=0 2 passed
+tests/test_bucket_edge_table.py exit=0 3 passed
+tests/test_bucket_locking_phase4.py exit=0 20 passed
+tests/test_bucket_metadata_boundary.py exit=0 6 passed
+tests/test_bucket_type_migration_contract.py exit=0 35 passed
+tests/test_code_fingerprint.py exit=0 3 passed
+tests/test_code_health_regressions.py exit=1 1 failed, 5 passed
+tests/test_code_standards_phase17.py exit=0 15 passed
+tests/test_command_boundary_phase18.py exit=0 9 passed
+tests/test_comprehensive.py exit=0 132 passed
+tests/test_context_serialization_phase8b.py exit=0 6 passed
+tests/test_crash_recovery_phase13.py exit=0 8 passed
+tests/test_dashboard_auth_flow.py exit=0 9 passed
+tests/test_dashboard_bucket_edit_persistence.py exit=0 21 passed
+tests/test_dashboard_bucket_list_sort.py exit=0 5 passed
+tests/test_dashboard_bucket_view_state.py exit=0 15 passed
+tests/test_dashboard_diagnostics_panel.py exit=0 2 passed
+tests/test_dashboard_env_config_contract.py exit=0 9 passed
+tests/test_dashboard_github_config_contract.py exit=0 3 passed
+tests/test_dashboard_import_preflight.py exit=0 1 passed
+tests/test_dashboard_memory_editor_contract.py exit=0 17 passed
+tests/test_dashboard_update_source.py exit=0 3 passed
+tests/test_data_dir_persistence.py exit=0 7 passed
+tests/test_datetime_metadata_normalization.py exit=0 1 passed
+tests/test_decay_plan_letter_no_autoresolve.py exit=0 3 passed
+tests/test_dehydrator_cache_lifecycle.py exit=0 2 passed
+tests/test_dehydrator_output_icon.py exit=0 11 passed
+tests/test_dehydrator_perspective_rule.py exit=0 1 passed
+tests/test_dehydrator_response_boundary.py exit=0 10 passed
+tests/test_developer_test_data_erasure.py exit=0 7 passed
+tests/test_docker_tunnel_persistence.py exit=0 6 passed
+tests/test_dream_prompt_boundary.py exit=0 8 passed
+tests/test_embedding_api_regression.py exit=0 10 passed
+tests/test_embedding_outbox.py exit=0 30 passed
+tests/test_embedding_route_reservations.py exit=0 4 passed
+tests/test_entrypoint_code_bootstrap.py exit=0 5 passed
+tests/test_env_config_identity.py exit=0 5 passed
+tests/test_export_streaming_route.py exit=0 4 passed
+tests/test_feel_flow.py exit=1 8 errors
+tests/test_fetch_cloudflared.py exit=0 15 passed
+tests/test_footprint.py exit=0 7 passed
+tests/test_formal_invariants_phase10.py exit=0 8 passed
+tests/test_formal_invariants_phase8a.py exit=0 8 passed
+tests/test_freshness_clock.py exit=0 11 passed
+tests/test_gen_update_manifest.py exit=0 4 passed
+tests/test_github_backup_alarm.py exit=0 2 passed
+tests/test_github_backup_manifest.py exit=1 9 failed, 8 passed
+tests/test_github_config_api.py exit=0 3 passed
+tests/test_github_sync_long_path.py exit=1 1 failed
+tests/test_github_sync_memory_bounds.py exit=1 2 failed, 7 passed
+tests/test_github_sync_zero_commit.py exit=1 1 failed
+tests/test_grow_items.py exit=0 29 passed
+tests/test_hnf1_pas_partition_checker.py exit=0 63 passed
+tests/test_hot_update_concurrency.py exit=124 .
+tests/test_hot_update_persistence.py exit=0 8 passed
+tests/test_human_rename_transaction.py exit=0 5 passed
+tests/test_i_sediment.py exit=0 14 passed
+tests/test_import_extraction_json.py exit=0 6 passed
+tests/test_import_memory_regressions.py exit=0 20 passed
+tests/test_import_preflight.py exit=0 12 passed
+tests/test_import_start_reservation.py exit=0 7 passed
+tests/test_issue_62_63_regressions.py exit=0 2 passed
+tests/test_ledger_mirror_phase1.py exit=0 6 passed
+tests/test_ledger_property_phase5b.py exit=0 2 passed
+tests/test_ledger_replay_phase5a.py exit=0 2 passed
+tests/test_letter_author_regression.py exit=0 10 passed
+tests/test_letter_dashboard_regressions.py exit=0 3 passed
+tests/test_letter_read_regression.py exit=0 4 passed
+tests/test_letter_time_lock.py exit=1 6 failed, 18 passed
+tests/test_list_all_cache.py exit=0 12 passed
+tests/test_llm_quality.py exit=0 7 skipped
+tests/test_login_rate_limit.py exit=0 9 passed
+tests/test_maintenance_tool_safety.py exit=0 3 passed
+tests/test_mcp_open_access_warning.py exit=0 3 passed
+tests/test_mcp_static_token_auth.py exit=0 23 passed
+tests/test_mcp_tools_docker_integration.py exit=0 90 skipped
+tests/test_media_store.py exit=0 8 passed
+tests/test_memory_boundary_regressions.py exit=0 9 passed
+tests/test_migrate_job_state.py exit=0 17 passed
+tests/test_migration_contract_phase15.py exit=0 7 passed
+tests/test_migration_engine_atomic_swap.py exit=0 8 passed
+tests/test_multi_owner_isolation.py exit=0 2 passed
+tests/test_multi_owner_launcher.py exit=0 8 passed
+tests/test_neural_tool_router_phase8c.py exit=0 7 passed
+tests/test_oauth_mcp_public_origin.py exit=0 23 passed
+tests/test_oauth_refresh_token.py exit=0 47 passed
+tests/test_observability_boundary_phase12.py exit=0 19 passed
+tests/test_owner_identity.py exit=0 12 passed
+tests/test_password_kdf.py exit=0 14 passed
+tests/test_permanent_breath_regression.py exit=0 10 passed
+tests/test_phase2_web_security.py exit=1 21 failed, 71 passed
+tests/test_pinned_quota_web_regression.py exit=0 13 passed
+tests/test_pinned_visibility_regression.py exit=1 1 failed, 3 passed
+tests/test_plan_auto_resolve_switch.py exit=0 21 passed
+tests/test_plugin_agency_boundary_phase11.py exit=0 12 passed
+tests/test_priority4_confusion_cleanup.py exit=0 57 passed
+tests/test_projection_mirror_phase2.py exit=0 6 passed
+tests/test_public_oauth_docker_integration.py exit=0 1 skipped
+tests/test_public_surface_minimization.py exit=0 4 passed
+tests/test_public_tool_design_phase16.py exit=0 37 passed
+tests/test_quota_counter_sync_regression.py exit=0 9 passed
+tests/test_quota_race_regression.py exit=0 4 passed
+tests/test_reclassify_api.py exit=0 6 passed
+tests/test_red_lines_phase21.py exit=0 11 passed
+tests/test_red_team_regressions.py exit=0 20 passed
+tests/test_release_audit_regressions.py exit=0 12 passed
+tests/test_render_blueprint_contract.py exit=0 2 passed
+tests/test_render_config_path.py exit=0 5 passed
+tests/test_replication_contract_phase14.py exit=0 8 passed
+tests/test_restart_api.py exit=0 2 passed
+tests/test_retrieval_eval.py exit=0 7 passed
+tests/test_retrieval_resilience.py exit=0 7 passed
+tests/test_retrieval_scoring_phase9.py exit=0 7 passed
+tests/test_rust_kernel_phase6a.py exit=0 2 passed
+tests/test_scoring.py exit=1 18 passed, 9 errors
+tests/test_search_similar_vectorized.py exit=0 6 passed
+tests/test_secure_onboarding.py exit=0 60 passed
+tests/test_security_regression.py exit=0 32 passed
+tests/test_server_app.py exit=1 2 failed, 70 passed
+tests/test_server_proxy_header_contract.py exit=0 1 passed
+tests/test_source_layer.py exit=0 15 passed
+tests/test_sqlite_projection_phase2b.py exit=0 2 passed
+tests/test_src_package_migration.py exit=0 16 passed
+tests/test_surface_context_compiler_phase19.py exit=0 6 passed
+tests/test_surface_policy_phase3.py exit=0 43 passed
+tests/test_system_diagnostics.py exit=0 4 passed
+tests/test_tombstone_erasure_phase4.py exit=0 1 passed
+tests/test_tool_output_contract_phase8d.py exit=0 8 passed
+tests/test_touch_hotpath.py exit=0 4 passed
+tests/test_touch_strong_hit.py exit=0 6 passed
+tests/test_trace_content_patch_regression.py exit=0 11 passed
+tests/test_trace_importance_regression.py exit=0 10 passed
+tests/test_trace_mcp_patch_regression.py exit=2 1 error
+tests/test_tunnel_autostart.py exit=0 8 passed
+tests/test_update_compile_guard.py exit=0 6 passed
+tests/test_update_integrity.py exit=1 2 failed, 12 passed, 2 warnings
+tests/test_update_manifest_repo_bytes.py exit=1 1 failed, 3 passed
+tests/test_update_source_gate.py exit=0 32 passed
+tests/test_v3_architecture_audit.py exit=0 5 passed
+tests/test_v3_bucket_adapter.py exit=0 4 passed
+tests/test_v3_capability_catalog.py exit=0 4 passed
+tests/test_v3_capability_microkernel.py exit=0 5 passed
+tests/test_v3_collab_graph.py exit=0 6 passed
+tests/test_v3_consensus.py exit=0 2 passed
+tests/test_v3_consistency_auditor.py exit=0 10 passed
+tests/test_v3_dashboard_debug_view.py exit=0 2 passed
+tests/test_v3_debug_web_api.py exit=0 3 passed
+tests/test_v3_decision_debug_service.py exit=0 7 passed
+tests/test_v3_decision_record.py exit=0 3 passed
+tests/test_v3_decision_replay.py exit=0 4 passed
+tests/test_v3_distributed_fabric.py exit=0 4 passed
+tests/test_v3_event_sourced_kernel.py exit=0 4 passed
+tests/test_v3_formal_acceptance_harness.py exit=0 4 passed
+tests/test_v3_kernel_registry.py exit=0 10 passed
+tests/test_v3_legacy_bucket_integration.py exit=0 3 passed
+tests/test_v3_legacy_command_bridge.py exit=0 3 passed
+tests/test_v3_legacy_component_attachment.py exit=0 3 passed
+tests/test_v3_legacy_execution_pipeline.py exit=0 7 passed
+tests/test_v3_legacy_module_profiles.py exit=0 3 passed
+tests/test_v3_legacy_runtime.py exit=0 25 passed
+tests/test_v3_legacy_server_wiring.py exit=0 2 passed
+tests/test_v3_legacy_tool_entrypoints.py exit=0 4 passed
+tests/test_v3_legacy_tools_runtime.py exit=0 8 passed
+tests/test_v3_legacy_web_integration.py exit=0 6 passed
+tests/test_v3_maintenance_report.py exit=0 7 passed
+tests/test_v3_memory_command_router.py exit=0 4 passed
+tests/test_v3_memory_event.py exit=0 17 passed
+tests/test_v3_memory_fabric.py exit=0 2 passed
+tests/test_v3_memory_invariants.py exit=0 4 passed
+tests/test_v3_migration.py exit=0 4 passed
+tests/test_v3_package.py exit=0 2 passed
+tests/test_v3_plugin_runtime.py exit=0 7 passed
+tests/test_v3_policy_contracts.py exit=1 1 failed, 2 passed
+tests/test_v3_policy_engine.py exit=0 5 passed
+tests/test_v3_policy_vm.py exit=0 5 passed
+tests/test_v3_projection_observers.py exit=0 8 passed
+tests/test_v3_projection_runtime.py exit=0 4 passed
+tests/test_v3_query_planner.py exit=0 4 passed
+tests/test_v3_raft_cluster.py exit=0 5 passed
+tests/test_v3_resilience_scanner.py exit=0 5 passed
+tests/test_v3_snapshot_catchup.py exit=0 7 passed
+tests/test_v3_static_surfaces.py exit=2 1 error
+tests/test_v3_update_policy.py exit=0 3 passed
+tests/test_v3_wal.py exit=0 6 passed
+tests/test_vault_health.py exit=0 3 passed
+tests/test_vector_projection_phase2c.py exit=0 4 passed
+tests/test_version_consistency.py exit=0 1 passed
+tests/test_vnext_preflight_report_phase22.py exit=0 7 passed
+tests/test_web_api_docker_integration.py exit=0 1 skipped
