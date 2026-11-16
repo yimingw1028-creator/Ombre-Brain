@@ -72,6 +72,8 @@ async def test_dream_includes_core_bucket_content_as_reference(bucket_mgr):
         domain=["rules"],
     )
     install_runtime(bucket_mgr, EchoDehydrator())
+    # 二改第 1 刀：dream 默认只列核心准则的目录。这条测的是全文模式，先切回去。
+    rt.config["surfacing"]["dream_core_mode"] = "full"
 
     result = await dream_dispatch(window_hours=48)
 

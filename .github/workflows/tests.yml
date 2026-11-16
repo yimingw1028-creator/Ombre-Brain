@@ -1,14 +1,9 @@
 name: Tests
 
+# 二改：这份是上游的发布检查，我们不用它，只留手动触发。
+# 我们自己的测试在 ergai-tests.yml，说明见根目录 二改记录.md 的「关于测试」。
 on:
-  push:
-    branches: [main, testing]
-    paths-ignore:
-      - '*.md'
-      - 'backup_*/**'
-      - '.gitignore'
-  pull_request:
-    branches: [main, testing]
+  workflow_dispatch:
 
 jobs:
   test:

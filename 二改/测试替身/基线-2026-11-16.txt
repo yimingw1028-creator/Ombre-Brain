@@ -67,12 +67,10 @@ FAILED tests/test_phase2_web_security.py::test_mcp_exception_secrets_never_reach
 FAILED tests/test_phase2_web_security.py::test_mcp_operation_logs_never_copy_text_or_control_sequences
 FAILED tests/test_phase2_web_security.py::test_mcp_public_tool_error_returns_only_reviewed_static_message
 FAILED tests/test_phase2_web_security.py::test_webhook_failure_log_does_not_expose_signed_url
-FAILED tests/test_pinned_visibility_regression.py::test_dream_includes_core_bucket_content_as_reference
 FAILED tests/test_server_app.py::test_kelivo_compatible_stateless_json_handshake_lists_all_tools
 FAILED tests/test_server_app.py::test_stdio_mcp_server_resets_existing_boot_marker_after_successful_handshake
 FAILED tests/test_update_integrity.py::test_update_download_stream_enforces_actual_byte_limit
 FAILED tests/test_update_integrity.py::test_update_download_streams_complete_archive_to_disk
-FAILED tests/test_update_manifest_repo_bytes.py::test_shipped_manifest_matches_repository_bytes
 FAILED tests/test_v3_policy_contracts.py::test_policy_package_exports_policy_vm_symbols
 tests/test_adr_requirements_phase20.py exit=0 8 passed
 tests/test_api_timeout_config.py exit=0 4 passed
@@ -186,7 +184,7 @@ tests/test_password_kdf.py exit=0 14 passed
 tests/test_permanent_breath_regression.py exit=0 10 passed
 tests/test_phase2_web_security.py exit=1 21 failed, 71 passed
 tests/test_pinned_quota_web_regression.py exit=0 13 passed
-tests/test_pinned_visibility_regression.py exit=1 1 failed, 3 passed
+tests/test_pinned_visibility_regression.py exit=0 4 passed
 tests/test_plan_auto_resolve_switch.py exit=0 21 passed
 tests/test_plugin_agency_boundary_phase11.py exit=0 12 passed
 tests/test_priority4_confusion_cleanup.py exit=0 57 passed
@@ -230,7 +228,7 @@ tests/test_trace_mcp_patch_regression.py exit=2 1 error
 tests/test_tunnel_autostart.py exit=0 8 passed
 tests/test_update_compile_guard.py exit=0 6 passed
 tests/test_update_integrity.py exit=1 2 failed, 12 passed, 2 warnings
-tests/test_update_manifest_repo_bytes.py exit=1 1 failed, 3 passed
+tests/test_update_manifest_repo_bytes.py exit=0 4 passed
 tests/test_update_source_gate.py exit=0 32 passed
 tests/test_v3_architecture_audit.py exit=0 5 passed
 tests/test_v3_bucket_adapter.py exit=0 4 passed
