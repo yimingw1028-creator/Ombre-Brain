@@ -281,3 +281,4 @@ tests/test_vector_projection_phase2c.py exit=0 4 passed
 tests/test_version_consistency.py exit=0 1 passed
 tests/test_vnext_preflight_report_phase22.py exit=0 7 passed
 tests/test_web_api_docker_integration.py exit=0 1 skipped
+tests/test_write_tagger_switch.py exit=0 27 passed
