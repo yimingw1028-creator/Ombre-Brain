@@ -84,6 +84,7 @@ async def test_pulse_shows_special_bucket_counts_separately(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_grow_shortpath_explains_hold_style_single_memory(monkeypatch):
     from tools.grow import shortpath
 

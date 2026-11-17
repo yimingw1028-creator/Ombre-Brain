@@ -51,6 +51,17 @@ def auto_merge_on(monkeypatch):
 
 
 @pytest.fixture
+def write_tagger_on(monkeypatch):
+    """二改第 8 刀：写入默认不调小模型。专门测打标 / 拆日记路径的测试用这个把它打开。
+
+    用法：@pytest.mark.usefixtures("write_tagger_on")
+    """
+    from tools import _common
+
+    monkeypatch.setattr(_common, "_WRITE_TAGGER_DEFAULT", True)
+
+
+@pytest.fixture
 def test_config(tmp_path):
     """
     Minimal config pointing to a temp directory.

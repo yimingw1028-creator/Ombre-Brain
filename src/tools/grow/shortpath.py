@@ -31,14 +31,14 @@ except ImportError:  # pragma: no cover - 包内导入兜底
 from .. import _runtime as rt
 from .._common import (
     merge_or_create, check_duplicate_for, check_plan_resolution,
-    is_exact_duplicate_notice,
+    is_exact_duplicate_notice, analyze_for_write,
 )
 
 
 async def grow_shortpath(content: str, test_data: bool = False) -> str:
     rt.logger.info(f"grow short-content fast path: {len(content.strip())} chars")
     try:
-        analysis = await rt.dehydrator.analyze(content, include_why=True)
+        analysis = await analyze_for_write(content, include_why=True)   # 二改第 8 刀
     except Exception as e:
         rt.logger.error(
             "grow short analysis failed: err_type=%s detail=hidden",

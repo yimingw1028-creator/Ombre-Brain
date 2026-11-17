@@ -1,0 +1,767 @@
+diff --git a/src/server.py b/src/server.py
+index 9efdcd7..81e43e9 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -752,7 +752,7 @@ async def hold(
+     media: Optional[list | str] = None,
+     test_data: Optional[bool] = False,
+ ) -> str:
+-    """仅在对话中已明确决定“这段内容值得成为长期记忆”时调用；不要因普通聊天、猜测或工具名称联想而自行调用。content 逐字保存，绝不压缩。title 可选；传入时是最终显式标题，优先于打标模型建议。系统自动补其余元数据，API 不可用时使用本地中性值继续保存。tags 逗号分隔，importance 1-10。pinned=True 标记为永久核心；feel=True 存为感受类记忆。source_bucket 是正在消化的原始记忆桶 ID。why_remembered 与 meaning 是可选的第一人称记录原因。media 可传服务器可读路径或 data_base64+filename 列表项。"""
++    """仅在对话中已明确决定“这段内容值得成为长期记忆”时调用；不要因普通聊天、猜测或工具名称联想而自行调用。content 逐字保存，绝不压缩。写入不经过别的模型：title、tags、valence、arousal 都由你自己带；没带时标题留空，valence / arousal 用中性值 0.5 / 0.3。主题域不再由模型分配：feel 归 feel，其余都是“未分类”。tags 逗号分隔，importance 1-10。pinned=True 标记为永久核心；feel=True 存为感受类记忆。source_bucket 是正在消化的原始记忆桶 ID。why_remembered 与 meaning 是可选的第一人称记录原因。media 可传服务器可读路径或 data_base64+filename 列表项。"""
+     return await _with_notice(
+         _t_hold.dispatch(
+             content=content, title=title, tags=tags, importance=importance,
+@@ -776,9 +776,9 @@ async def hold(
+ async def grow(
+     content: str = "", items: Optional[list] = None, test_data: Optional[bool] = False
+ ) -> str:
+-    """仅在对话中已明确要求整理并写入长期记忆时调用，不要根据普通聊天自行推断写入意图。整理一段长文本(如一天的记录/一段日记/一篇总结)存入记忆,系统拆分为 2~6 条独立事件桶,每条各自新建、不并进旧桶(同一件事的后续要接进旧桶,用 trace)。短内容(<30 字)走 hold 单条快速路径,不强行拆分。
++    """仅在对话中已明确要求整理并写入长期记忆时调用，不要根据普通聊天自行推断写入意图。一次把几件事存进长期记忆：先自己分好条，用 items 传入，每条各自新建、不并进旧桶(同一件事的后续要接进旧桶,用 trace)。只传一段长 content、不带 items 时不会写入，只返回一句提示——系统不再替你拆分和改写。短内容(<30 字)走 hold 单条快速路径,原样存成一条。
+ 
+-    进阶(可选):若你已经把长文拆成 N 条最终正文，可传字符串 items，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","source_ranges":[[1,20]]}]。显式字段优先于自动打标，正文逐字入库；正文与已有的桶逐字相同时不重复写入。人工 why_remembered 可在首次新建时直接保存；digest 或短内容打标自动生成的理由首次不写，只在后续 grow 确认合并到同一事件且旧理由为空时补入，绝不覆盖旧值。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
++    items 的写法:可传字符串列表，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","source_ranges":[[1,20]]}]。正文逐字入库，写入不经过别的模型：你带的字段原样生效；没带的用中性值(标题留空、无标签、importance 5、valence 0.5、arousal 0.3)，主题域不带就是“未分类”。正文与已有的桶逐字相同时不重复写入。why_remembered 你带了就保存，系统不会替你生成。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
+     return await _with_notice(
+         _t_grow.dispatch(content, items=items, test_data=test_data),
+         op="grow",
+diff --git a/src/tools/_common.py b/src/tools/_common.py
+index 79ccdb5..21edff0 100644
+--- a/src/tools/_common.py
++++ b/src/tools/_common.py
+@@ -113,6 +113,21 @@ _EXACT_DUPLICATE_NOTICE = (
+     "这次带的 tags / importance / 标题没有生效，需要的话用 trace 改。"
+ )
+ 
++# --- 二改第 8 刀：写入时调不调小模型的开关 ---
++# 原行为：hold / grow 写入时把正文发给小模型（dehydrator.analyze）要主题域、
++# valence、arousal、标签、建议标题；grow(content=长文) 还让它（digest）把长文
++# 拆成 2~6 条并改写。
++# 现在：默认不调。写入的一方自己带的字段照常生效，没带的用本地中性值
++# （dehydrator._default_analysis()：未分类、0.5、0.3、空标签、空标题、
++# importance 5）。grow 不带 items 的长文不写入，返回一句提示改用 items。
++# 向量检索是另一个接口、另一个 key，这个开关不碰它。
++# 开关：config.yaml 里 write.use_tagger: true → 回到原行为。
++_WRITE_TAGGER_DEFAULT = False
++_GROW_NEEDS_ITEMS_NOTICE = (
++    "没有写入：系统不再替你拆分和改写长文。"
++    "请自己分好条，用 grow(items=[...]) 逐字存；只有一件事就用 hold。"
++)
++
+ # --- 字段截断长度（下游存储 / 日志可读性）---
+ _RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
+ _LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
+@@ -1400,6 +1415,39 @@ def plan_auto_resolve_enabled() -> bool:
+     return _config_flag("plan", "auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
+ 
+ 
++def write_tagger_enabled() -> bool:
++    """读取 write.use_tagger 开关（二改第 8 刀）。默认关：写入不调小模型。"""
++    return _config_flag("write", "use_tagger", _WRITE_TAGGER_DEFAULT)
++
++
++def local_default_analysis() -> dict:
++    """本地中性元数据，不调模型。和打标失败时的降级用的是同一份。"""
++    default_analysis = getattr(rt.dehydrator, "_default_analysis", None)
++    if callable(default_analysis):
++        return default_analysis()
++    return {
++        "domain": ["未分类"],
++        "valence": 0.5,
++        "arousal": 0.3,
++        "tags": [],
++        "suggested_name": "",
++        "importance": 5,
++        "why_remembered": "",
++    }
++
++
++async def analyze_for_write(content: str, **kwargs) -> dict:
++    """hold / grow 写入时取元数据的唯一入口（二改第 8 刀）。
++
++    开关关着（默认）：不调小模型，直接返回本地中性值。
++    开关开着：原样调 dehydrator.analyze，异常照旧抛给调用方，各处原来的
++    降级和报错都不变。
++    """
++    if not write_tagger_enabled():
++        return local_default_analysis()
++    return await rt.dehydrator.analyze(content, **kwargs)
++
++
+ async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:
+     """新事件触发 active plan 关键词/向量召回，再由 LLM 保守判断是否闭环。"""
+     # 二改第 6 刀：默认关闭。关着的时候不列桶、不搜、不调小模型，直接返回。
+diff --git a/src/tools/grow/core.py b/src/tools/grow/core.py
+index e0c7fdc..dfc7db6 100644
+--- a/src/tools/grow/core.py
++++ b/src/tools/grow/core.py
+@@ -44,10 +44,16 @@ from .._common import (
+     check_duplicate_for,
+     check_plan_resolution,
+     is_exact_duplicate_notice,
++    analyze_for_write,
++    write_tagger_enabled,
++    _GROW_NEEDS_ITEMS_NOTICE,
+ )
+ 
+ 
+ async def grow_core(content: str, test_data: bool = False) -> str:
++    # 二改第 8 刀：开关关着（默认）时不调 digest，不拆、不改写、不写入。
++    if not write_tagger_enabled():
++        return _GROW_NEEDS_ITEMS_NOTICE
+     try:
+         items = await rt.dehydrator.digest(content)
+     except Exception as e:
+@@ -217,7 +223,7 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
+             item_metadata_fallback = False
+             if needs_analysis:
+                 try:
+-                    meta = await rt.dehydrator.analyze(content_str)
++                    meta = await analyze_for_write(content_str)   # 二改第 8 刀
+                 except Exception as e:
+                     item_metadata_fallback = True
+                     rt.logger.warning(
+diff --git a/src/tools/grow/shortpath.py b/src/tools/grow/shortpath.py
+index d08723d..e23bb44 100644
+--- a/src/tools/grow/shortpath.py
++++ b/src/tools/grow/shortpath.py
+@@ -31,14 +31,14 @@ except ImportError:  # pragma: no cover - 包内导入兜底
+ from .. import _runtime as rt
+ from .._common import (
+     merge_or_create, check_duplicate_for, check_plan_resolution,
+-    is_exact_duplicate_notice,
++    is_exact_duplicate_notice, analyze_for_write,
+ )
+ 
+ 
+ async def grow_shortpath(content: str, test_data: bool = False) -> str:
+     rt.logger.info(f"grow short-content fast path: {len(content.strip())} chars")
+     try:
+-        analysis = await rt.dehydrator.analyze(content, include_why=True)
++        analysis = await analyze_for_write(content, include_why=True)   # 二改第 8 刀
+     except Exception as e:
+         rt.logger.error(
+             "grow short analysis failed: err_type=%s detail=hidden",
+diff --git a/src/tools/hold/core.py b/src/tools/hold/core.py
+index a47e9a3..b270b05 100644
+--- a/src/tools/hold/core.py
++++ b/src/tools/hold/core.py
+@@ -32,7 +32,7 @@ from utils import normalize_memory_title
+ from .. import _runtime as rt
+ from .._common import (
+     merge_or_create, check_duplicate_for, check_plan_resolution,
+-    is_exact_duplicate_notice,
++    is_exact_duplicate_notice, analyze_for_write,
+ )
+ 
+ 
+@@ -50,7 +50,7 @@ async def store_core(
+ ) -> str:
+     metadata_fallback = False
+     try:
+-        analysis = await rt.dehydrator.analyze(content)
++        analysis = await analyze_for_write(content)   # 二改第 8 刀：默认不调小模型
+     except Exception as e:
+         metadata_fallback = True
+         rt.logger.warning(
+diff --git a/src/tools/hold/pinned.py b/src/tools/hold/pinned.py
+index 3668f23..2675f17 100644
+--- a/src/tools/hold/pinned.py
++++ b/src/tools/hold/pinned.py
+@@ -25,7 +25,7 @@ permanent 目录，不衰减、不会被合并掉。
+ from utils import normalize_memory_title
+ 
+ from .. import _runtime as rt
+-from .._common import check_pinned_quota, _quota_turn
++from .._common import check_pinned_quota, _quota_turn, analyze_for_write
+ 
+ 
+ async def store_pinned(
+@@ -39,7 +39,7 @@ async def store_pinned(
+     media: list | None = None,
+ ) -> str:
+     try:
+-        analysis = await rt.dehydrator.analyze(content)
++        analysis = await analyze_for_write(content)   # 二改第 8 刀：默认不调小模型
+     except Exception as e:
+         rt.logger.warning(f"Auto-tagging failed, using defaults / 自动打标失败: {e}")
+         analysis = {
+diff --git a/tests/conftest.py b/tests/conftest.py
+index b831870..12b4dac 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -50,6 +50,17 @@ def auto_merge_on(monkeypatch):
+     monkeypatch.setattr(_common, "_AUTO_MERGE_DEFAULT", True)
+ 
+ 
++@pytest.fixture
++def write_tagger_on(monkeypatch):
++    """二改第 8 刀：写入默认不调小模型。专门测打标 / 拆日记路径的测试用这个把它打开。
++
++    用法：@pytest.mark.usefixtures("write_tagger_on")
++    """
++    from tools import _common
++
++    monkeypatch.setattr(_common, "_WRITE_TAGGER_DEFAULT", True)
++
++
+ @pytest.fixture
+ def test_config(tmp_path):
+     """
+diff --git a/tests/test_grow_items.py b/tests/test_grow_items.py
+index 8b31bdc..29954d5 100644
+--- a/tests/test_grow_items.py
++++ b/tests/test_grow_items.py
+@@ -66,6 +66,7 @@ def grow_rt(bucket_mgr, monkeypatch):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_items_stored_verbatim_no_digest(grow_rt):
+     bucket_mgr, stub = grow_rt
+     original = [
+@@ -84,6 +85,7 @@ async def test_items_stored_verbatim_no_digest(grow_rt):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_items_share_batch_and_metadata(grow_rt):
+     bucket_mgr, stub = grow_rt
+     await grow_items(["第一条内容啊啊啊啊啊", "第二条内容哦哦哦哦哦"])
+@@ -171,6 +173,7 @@ async def test_dict_item_stores_explicit_why_remembered_on_first_create(grow_rt)
+ @pytest.mark.asyncio
+ # 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+ @pytest.mark.usefixtures("auto_merge_on")
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
+     bucket_mgr, _stub = grow_rt
+ 
+@@ -207,6 +210,7 @@ async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
+ @pytest.mark.asyncio
+ # 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
+ @pytest.mark.usefixtures("auto_merge_on")
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
+     bucket_mgr, stub = grow_rt
+     content = "短内容二次命中同一事件"
+@@ -227,6 +231,7 @@ async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_digest_merge_never_overwrites_existing_why_remembered(grow_rt):
+     bucket_mgr, _stub = grow_rt
+     event_content = "旧桶已经有人工写下的保留理由。"
+@@ -351,6 +356,7 @@ async def test_concurrent_trace_why_wins_over_stale_grow_merge(
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_missing_title_and_importance_are_filled_by_analysis(grow_rt):
+     bucket_mgr, _stub = grow_rt
+ 
+@@ -576,6 +582,7 @@ async def test_aligned_multi_event_source_ranges_round_trip(grow_rt):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_dispatch_without_items_unchanged(grow_rt):
+     # 不传 items：长文仍走 digest 路径（stub.digest 会炸，grow_core 包成 RuntimeError）
+     # → 证明默认路径没变、digest 仍在原路径被调用
+@@ -584,6 +591,7 @@ async def test_dispatch_without_items_unchanged(grow_rt):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_grow_digest_failure_hides_provider_detail(grow_rt):
+     _bucket_mgr, _stub = grow_rt
+     provider_secret = "sk-provider-secret https://provider.invalid/private"
+@@ -618,6 +626,7 @@ async def test_grow_digest_failure_hides_provider_detail(grow_rt):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_grow_digest_blames_key_only_when_api_unavailable(grow_rt):
+     """只有 API 真的没配好时，才允许把人指向 OMBRE_COMPRESS_API_KEY。"""
+     _bucket_mgr, _stub = grow_rt
+diff --git a/tests/test_memory_boundary_regressions.py b/tests/test_memory_boundary_regressions.py
+index 7bafddd..89375c8 100644
+--- a/tests/test_memory_boundary_regressions.py
++++ b/tests/test_memory_boundary_regressions.py
+@@ -89,6 +89,7 @@ async def test_plan_resolution_keyword_fallback_reaches_related_plan_beyond_cap(
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_hold_analysis_failure_preserves_exact_content(monkeypatch):
+     original = "第一行，不要改写。\n\n第二行 <raw> & symbols."
+     captured = {}
+diff --git a/tests/test_priority4_confusion_cleanup.py b/tests/test_priority4_confusion_cleanup.py
+index e6bd811..258d2db 100644
+--- a/tests/test_priority4_confusion_cleanup.py
++++ b/tests/test_priority4_confusion_cleanup.py
+@@ -84,6 +84,7 @@ async def test_pulse_shows_special_bucket_counts_separately(monkeypatch):
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_grow_shortpath_explains_hold_style_single_memory(monkeypatch):
+     from tools.grow import shortpath
+ 
+diff --git a/tests/test_source_layer.py b/tests/test_source_layer.py
+index d99afbc..00ad97b 100644
+--- a/tests/test_source_layer.py
++++ b/tests/test_source_layer.py
+@@ -216,6 +216,7 @@ async def test_hold_explicit_title_wins_over_model_suggestion(
+ 
+ 
+ @pytest.mark.asyncio
++@pytest.mark.usefixtures("write_tagger_on")
+ async def test_hold_explicit_tags_replace_model_suggestions(
+     bucket_mgr, monkeypatch
+ ):
+diff --git a/tests/test_write_tagger_switch.py b/tests/test_write_tagger_switch.py
+new file mode 100644
+index 0000000..44ec553
+--- /dev/null
++++ b/tests/test_write_tagger_switch.py
+@@ -0,0 +1,441 @@
++"""二改第 8 刀：写入不再调小模型。
++
++原来 hold / grow 写入时会把正文发给小模型（dehydrator.analyze）要主题域、
++valence、arousal、标签和建议标题；grow(content=长文) 还让它（digest）把长文拆成
++2~6 条并改写。
++
++现在默认不调：写入的一方自己带的字段照常生效，没带的用本地中性值；
++grow 不带 items 的长文不写入，只返回一句提示。config.yaml 里
++write.use_tagger: true 回到原行为。
++"""
++
++import asyncio
++
++import pytest
++
++from bucket_manager import BucketManager
++from tools import _common as common
++from tools import _runtime as rt
++from tools.grow import core as grow_core_mod
++from tools.grow import dispatch as grow_dispatch
++from tools.grow import shortpath as grow_shortpath_mod
++from tools.hold import core as hold_core
++from tools.hold import pinned as hold_pinned
++
++_WARNING = "打标 API 暂不可用"
++_LONG = "2026-11-17 上午和 June 一起读二改记录，定了第 8 刀的四件事，然后开始跑基线。"
++
++
++class _Logger:
++    def info(self, *_args, **_kwargs):
++        pass
++
++    def warning(self, *_args, **_kwargs):
++        pass
++
++    def error(self, *_args, **_kwargs):
++        pass
++
++
++class _NoopDecay:
++    async def ensure_started(self):
++        pass
++
++
++class _SpyTagger:
++    """记下自己被叫了几次的小模型。给的值故意和本地中性值不一样。"""
++
++    api_available = True
++
++    def __init__(self, fail=False):
++        self.fail = fail
++        self.analyze_calls = 0
++        self.digest_calls = 0
++
++    async def analyze(self, _content, **_kwargs):
++        self.analyze_calls += 1
++        if self.fail:
++            raise RuntimeError("tagger down")
++        return {
++            "domain": ["模型分的域"],
++            "valence": 0.9,
++            "arousal": 0.8,
++            "tags": ["模型标签"],
++            "suggested_name": "模型起的标题",
++            "importance": 8,
++            "why_remembered": "",
++        }
++
++    async def digest(self, content):
++        self.digest_calls += 1
++        half = len(content) // 2
++        return [
++            {"name": "前半", "content": content[:half], "domain": ["模型分的域"]},
++            {"name": "后半", "content": content[half:], "domain": ["模型分的域"]},
++        ]
++
++    def _default_analysis(self):
++        return {
++            "domain": ["未分类"],
++            "valence": 0.5,
++            "arousal": 0.3,
++            "tags": [],
++            "suggested_name": "",
++            "importance": 5,
++            "why_remembered": "",
++        }
++
++    def invalidate_cache(self, _content):
++        pass
++
++
++def _wire(monkeypatch, tmp_path, config=None, fail=False):
++    manager = BucketManager(
++        {"buckets_dir": str(tmp_path / "vault")}, embedding_engine=None
++    )
++    tagger = _SpyTagger(fail=fail)
++    monkeypatch.setattr(rt, "bucket_mgr", manager, raising=False)
++    monkeypatch.setattr(rt, "embedding_engine", None, raising=False)
++    monkeypatch.setattr(rt, "dehydrator", tagger, raising=False)
++    monkeypatch.setattr(rt, "decay_engine", _NoopDecay(), raising=False)
++    monkeypatch.setattr(rt, "config", config if config is not None else {}, raising=False)
++    monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++    monkeypatch.setattr(rt, "fire_webhook", None, raising=False)
++    return manager, tagger
++
++
++async def _settle():
++    """让 hold / grow 末尾丢出去的后台任务跑完。"""
++    await asyncio.sleep(0.05)
++
++
++async def _active(manager):
++    return await manager.list_all(include_archive=False)
++
++
++async def _hold(content, *, tags=None, importance=5, valence=-1, arousal=-1, title=""):
++    out = await hold_core.store_core(
++        content, tags or [], importance, valence, arousal, "", title=title,
++    )
++    await _settle()
++    return out
++
++
++_ON = {"write": {"use_tagger": True}}
++
++
++# ---------------------------------------------------------
++# 开关本身：读不到、写错了都按默认（关）
++# ---------------------------------------------------------
++
++@pytest.mark.parametrize(
++    "config",
++    [
++        {},
++        {"write": None},
++        {"write": {}},
++        {"write": "true"},
++        {"write": {"use_tagger": False}},
++        {"write": {"use_tagger": "false"}},
++        {"write": {"use_tagger": "maybe"}},
++        {"write": {"use_tagger": 1}},
++    ],
++)
++def test_switch_is_off_unless_clearly_turned_on(monkeypatch, config):
++    monkeypatch.setattr(rt, "config", config, raising=False)
++    assert common.write_tagger_enabled() is False
++
++
++@pytest.mark.parametrize("value", [True, "true", "on", "yes", "1"])
++def test_switch_turns_on_with_true_like_values(monkeypatch, value):
++    monkeypatch.setattr(rt, "config", {"write": {"use_tagger": value}}, raising=False)
++    assert common.write_tagger_enabled() is True
++
++
++# ---------------------------------------------------------
++# 默认：hold 不调小模型
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_hold_does_not_call_the_tagger(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path)
++
++    out = await _hold(_LONG)
++
++    assert tagger.analyze_calls == 0
++    assert out.startswith("新建→")
++    assert _WARNING not in out          # 开关关着不是故障
++    (bucket,) = await _active(manager)
++    assert bucket["content"] == _LONG   # 正文一字不动
++    meta = bucket["metadata"]
++    assert meta["domain"] == ["未分类"]
++    assert meta["valence"] == 0.5
++    assert meta["arousal"] == 0.3
++    assert meta["tags"] == []
++    assert not meta.get("title")        # 没带标题就留空，不替我起
++
++
++@pytest.mark.asyncio
++async def test_hold_keeps_every_field_i_bring(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path)
++
++    out = await _hold(
++        _LONG, tags=["OB二改", "日记"], importance=7,
++        valence=0.8, arousal=0.6, title="第 8 刀开工",
++    )
++
++    assert tagger.analyze_calls == 0
++    assert _WARNING not in out
++    (bucket,) = await _active(manager)
++    meta = bucket["metadata"]
++    assert meta["tags"] == ["OB二改", "日记"]
++    assert meta["importance"] == 7
++    assert meta["valence"] == 0.8
++    assert meta["arousal"] == 0.6
++    assert meta["title"] == "第 8 刀开工"
++    assert meta["domain"] == ["未分类"]
++
++
++@pytest.mark.asyncio
++async def test_pinned_hold_does_not_call_the_tagger(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path)
++
++    out = await hold_pinned.store_pinned(
++        "一条核心准则的正文。", ["准则"], -1, -1, "", title="准则标题",
++    )
++
++    assert tagger.analyze_calls == 0
++    assert out.startswith("📌钉选→")
++    (bucket,) = await _active(manager)
++    meta = bucket["metadata"]
++    assert bucket["content"] == "一条核心准则的正文。"
++    assert meta["pinned"] is True
++    assert meta["importance"] == 10
++    assert meta["tags"] == ["准则"]
++    assert meta["title"] == "准则标题"
++    assert meta["domain"] == ["未分类"]
++
++
++# ---------------------------------------------------------
++# 默认：grow 的三条路
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_grow_items_never_calls_the_tagger_whatever_is_missing(tmp_path, monkeypatch):
++    """一条什么都没带，一条只缺 domain（我们平时的写法），一条全带了。"""
++    manager, tagger = _wire(monkeypatch, tmp_path)
++    bare = "2026-11-17 第一条：只有正文，什么字段都没带。"
++    usual = "2026-11-17 第二条：带了标题、标签、重要度和理由，没带主题域。"
++    full = "2026-11-17 第三条：所有字段都带了。"
++
++    out = await grow_core_mod.grow_items([
++        bare,
++        {"content": usual, "title": "平时的写法", "tags": ["日记"],
++         "importance": 7, "why_remembered": "这是我们平时走的路"},
++        {"content": full, "title": "全带", "tags": ["全"], "importance": 6,
++         "domain": ["自己分的域"], "valence": 0.7, "arousal": 0.4},
++    ])
++    await _settle()
++
++    assert tagger.analyze_calls == 0
++    assert tagger.digest_calls == 0
++    assert "3条(预拆分·逐字)|新3合0" in out
++    assert _WARNING not in out
++    by_content = {b["content"]: b["metadata"] for b in await _active(manager)}
++    assert set(by_content) == {bare, usual, full}
++
++    assert by_content[bare]["domain"] == ["未分类"]
++    assert by_content[bare]["importance"] == 5
++    assert by_content[bare]["valence"] == 0.5
++    assert by_content[bare]["arousal"] == 0.3
++    assert by_content[bare]["tags"] == []
++    assert not by_content[bare].get("title")
++
++    assert by_content[usual]["title"] == "平时的写法"
++    assert by_content[usual]["tags"] == ["日记"]
++    assert by_content[usual]["importance"] == 7
++    assert by_content[usual]["why_remembered"] == "这是我们平时走的路"
++    assert by_content[usual]["domain"] == ["未分类"]
++
++    assert by_content[full]["domain"] == ["自己分的域"]
++    assert by_content[full]["valence"] == 0.7
++    assert by_content[full]["arousal"] == 0.4
++
++
++@pytest.mark.asyncio
++async def test_grow_long_content_without_items_writes_nothing(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path)
++
++    out = await grow_dispatch(_LONG)
++    await _settle()
++
++    assert tagger.digest_calls == 0
++    assert tagger.analyze_calls == 0
++    assert out == common._GROW_NEEDS_ITEMS_NOTICE
++    assert "没有写入" in out and "items" in out
++    assert await _active(manager) == []
++
++
++@pytest.mark.asyncio
++async def test_grow_short_content_is_still_saved_as_one_bucket(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path)
++
++    out = await grow_dispatch("  今天挑了地中海花园。  ")
++    await _settle()
++
++    assert tagger.analyze_calls == 0
++    assert "新建 →" in out
++    assert "未分类" in out
++    (bucket,) = await _active(manager)
++    assert bucket["content"] == "今天挑了地中海花园。"
++    assert bucket["metadata"]["domain"] == ["未分类"]
++    assert bucket["metadata"]["importance"] == 5
++
++
++@pytest.mark.asyncio
++async def test_grow_with_items_and_shared_content_still_goes_the_items_way(tmp_path, monkeypatch):
++    """同时传 content 和 items：content 是原文证据，不是要拆的长文，不该被拒绝。"""
++    from ombrebrain.storage.source_store import SourceStore
++
++    manager, tagger = _wire(monkeypatch, tmp_path)
++    monkeypatch.setattr(rt, "source_store", SourceStore(manager.base_dir), raising=False)
++
++    out = await grow_dispatch(_LONG, items=[{"content": _LONG, "title": "整段一条"}])
++    await _settle()
++
++    assert tagger.digest_calls == 0 and tagger.analyze_calls == 0
++    assert "1条(预拆分·逐字)|新1合0" in out
++    assert len(await _active(manager)) == 1
++
++
++# ---------------------------------------------------------
++# 开关打开：回到原行为
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_switch_on_hold_asks_the_tagger_again(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path, config=dict(_ON))
++
++    await _hold(_LONG)
++
++    assert tagger.analyze_calls == 1
++    (bucket,) = await _active(manager)
++    meta = bucket["metadata"]
++    assert meta["domain"] == ["模型分的域"]
++    assert meta["valence"] == 0.9
++    assert meta["arousal"] == 0.8
++    assert meta["tags"] == ["模型标签"]
++    assert meta["title"] == "模型起的标题"
++
++
++@pytest.mark.asyncio
++async def test_switch_on_tagger_failure_still_degrades_with_the_warning(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path, config=dict(_ON), fail=True)
++
++    out = await _hold(_LONG)
++
++    assert tagger.analyze_calls == 1
++    assert _WARNING in out              # 这才是真的故障，那句话该在
++    (bucket,) = await _active(manager)
++    assert bucket["content"] == _LONG
++    assert bucket["metadata"]["domain"] == ["未分类"]
++
++
++@pytest.mark.asyncio
++async def test_switch_on_pinned_and_shortpath_ask_the_tagger_again(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path, config=dict(_ON))
++
++    await hold_pinned.store_pinned("一条核心准则的正文。", [], -1, -1, "")
++    assert tagger.analyze_calls == 1
++
++    await grow_shortpath_mod.grow_shortpath("今天挑了地中海花园。")
++    await _settle()
++    assert tagger.analyze_calls == 2
++    domains = sorted(b["metadata"]["domain"][0] for b in await _active(manager))
++    assert domains == ["模型分的域", "模型分的域"]
++
++
++@pytest.mark.asyncio
++async def test_switch_on_grow_items_fills_missing_fields_from_the_tagger(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path, config=dict(_ON))
++
++    await grow_core_mod.grow_items(["2026-11-17 只有正文的一条，字段让模型补。"])
++    await _settle()
++
++    assert tagger.analyze_calls == 1
++    (bucket,) = await _active(manager)
++    assert bucket["metadata"]["domain"] == ["模型分的域"]
++    assert bucket["metadata"]["importance"] == 8
++
++
++@pytest.mark.asyncio
++async def test_switch_on_grow_long_content_is_digested_again(tmp_path, monkeypatch):
++    manager, tagger = _wire(monkeypatch, tmp_path, config=dict(_ON))
++
++    out = await grow_dispatch(_LONG)
++    await _settle()
++
++    assert tagger.digest_calls == 1
++    assert out != common._GROW_NEEDS_ITEMS_NOTICE
++    assert len(await _active(manager)) == 2
++
++
++# ---------------------------------------------------------
++# 这一刀声称不动的东西
++# ---------------------------------------------------------
++
++class _CountingEmbedding:
++    """向量检索是另一个接口、另一个 key：开关关着，写入照样要去生成向量。"""
++
++    enabled = True
++
++    def __init__(self):
++        self.stored = []
++
++    async def generate_and_store(self, bucket_id, content):
++        self.stored.append((bucket_id, content))
++        return True
++
++    def delete_embedding(self, _bucket_id):
++        pass
++
++    async def search_similar(self, *_args, **_kwargs):
++        return []
++
++    def __getattr__(self, _name):
++        return lambda *_args, **_kwargs: None
++
++
++@pytest.mark.asyncio
++async def test_embedding_is_still_generated_when_the_tagger_is_off(tmp_path, monkeypatch):
++    engine = _CountingEmbedding()
++    manager = BucketManager(
++        {"buckets_dir": str(tmp_path / "vault")}, embedding_engine=engine
++    )
++    tagger = _SpyTagger()
++    monkeypatch.setattr(rt, "bucket_mgr", manager, raising=False)
++    monkeypatch.setattr(rt, "embedding_engine", engine, raising=False)
++    monkeypatch.setattr(rt, "dehydrator", tagger, raising=False)
++    monkeypatch.setattr(rt, "config", {}, raising=False)
++    monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++
++    async def _no_duplicate_scan(*_args, **_kwargs):
++        return None
++
++    monkeypatch.setattr(hold_core, "check_duplicate_for", _no_duplicate_scan)
++
++    out = await _hold(_LONG, title="向量还在")
++
++    assert tagger.analyze_calls == 0
++    assert out.startswith("新建→")
++    (bucket,) = await _active(manager)
++    assert [content for _id, content in engine.stored] == [_LONG]
++    assert engine.stored[0][0] == bucket["id"]
++
++
++def test_the_tagger_code_is_still_there():
++    """这一刀不删旧代码：dehydrator 的方法都在，开关打开就能用。"""
++    import dehydrator
++
++    for name in ("analyze", "digest", "_default_analysis"):
++        assert callable(getattr(dehydrator.Dehydrator, name))

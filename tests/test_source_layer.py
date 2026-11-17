@@ -216,6 +216,7 @@ async def test_hold_explicit_title_wins_over_model_suggestion(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_hold_explicit_tags_replace_model_suggestions(
     bucket_mgr, monkeypatch
 ):

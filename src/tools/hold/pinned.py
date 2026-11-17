@@ -25,7 +25,7 @@ permanent 目录，不衰减、不会被合并掉。
 from utils import normalize_memory_title
 
 from .. import _runtime as rt
-from .._common import check_pinned_quota, _quota_turn
+from .._common import check_pinned_quota, _quota_turn, analyze_for_write
 
 
 async def store_pinned(
@@ -39,7 +39,7 @@ async def store_pinned(
     media: list | None = None,
 ) -> str:
     try:
-        analysis = await rt.dehydrator.analyze(content)
+        analysis = await analyze_for_write(content)   # 二改第 8 刀：默认不调小模型
     except Exception as e:
         rt.logger.warning(f"Auto-tagging failed, using defaults / 自动打标失败: {e}")
         analysis = {

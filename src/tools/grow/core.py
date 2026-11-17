@@ -44,10 +44,16 @@ from .._common import (
     check_duplicate_for,
     check_plan_resolution,
     is_exact_duplicate_notice,
+    analyze_for_write,
+    write_tagger_enabled,
+    _GROW_NEEDS_ITEMS_NOTICE,
 )
 
 
 async def grow_core(content: str, test_data: bool = False) -> str:
+    # 二改第 8 刀：开关关着（默认）时不调 digest，不拆、不改写、不写入。
+    if not write_tagger_enabled():
+        return _GROW_NEEDS_ITEMS_NOTICE
     try:
         items = await rt.dehydrator.digest(content)
     except Exception as e:
@@ -217,7 +223,7 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
             item_metadata_fallback = False
             if needs_analysis:
                 try:
-                    meta = await rt.dehydrator.analyze(content_str)
+                    meta = await analyze_for_write(content_str)   # 二改第 8 刀
                 except Exception as e:
                     item_metadata_fallback = True
                     rt.logger.warning(

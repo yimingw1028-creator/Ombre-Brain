@@ -89,6 +89,7 @@ async def test_plan_resolution_keyword_fallback_reaches_related_plan_beyond_cap(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_hold_analysis_failure_preserves_exact_content(monkeypatch):
     original = "第一行，不要改写。\n\n第二行 <raw> & symbols."
     captured = {}

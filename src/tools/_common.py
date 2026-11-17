@@ -113,6 +113,21 @@ _EXACT_DUPLICATE_NOTICE = (
     "这次带的 tags / importance / 标题没有生效，需要的话用 trace 改。"
 )
 
+# --- 二改第 8 刀：写入时调不调小模型的开关 ---
+# 原行为：hold / grow 写入时把正文发给小模型（dehydrator.analyze）要主题域、
+# valence、arousal、标签、建议标题；grow(content=长文) 还让它（digest）把长文
+# 拆成 2~6 条并改写。
+# 现在：默认不调。写入的一方自己带的字段照常生效，没带的用本地中性值
+# （dehydrator._default_analysis()：未分类、0.5、0.3、空标签、空标题、
+# importance 5）。grow 不带 items 的长文不写入，返回一句提示改用 items。
+# 向量检索是另一个接口、另一个 key，这个开关不碰它。
+# 开关：config.yaml 里 write.use_tagger: true → 回到原行为。
+_WRITE_TAGGER_DEFAULT = False
+_GROW_NEEDS_ITEMS_NOTICE = (
+    "没有写入：系统不再替你拆分和改写长文。"
+    "请自己分好条，用 grow(items=[...]) 逐字存；只有一件事就用 hold。"
+)
+
 # --- 字段截断长度（下游存储 / 日志可读性）---
 _RESOLUTION_REASON_MAX = 200           # 写入桶 frontmatter 的理由上限
 _LOG_REASON_PREVIEW = 60               # 日志里预览的理由长度
@@ -1398,6 +1413,39 @@ def auto_merge_enabled() -> bool:
 def plan_auto_resolve_enabled() -> bool:
     """读取 plan.auto_resolve 开关。读不到、写错了都按默认（关）处理。"""
     return _config_flag("plan", "auto_resolve", _PLAN_AUTO_RESOLVE_DEFAULT)
+
+
+def write_tagger_enabled() -> bool:
+    """读取 write.use_tagger 开关（二改第 8 刀）。默认关：写入不调小模型。"""
+    return _config_flag("write", "use_tagger", _WRITE_TAGGER_DEFAULT)
+
+
+def local_default_analysis() -> dict:
+    """本地中性元数据，不调模型。和打标失败时的降级用的是同一份。"""
+    default_analysis = getattr(rt.dehydrator, "_default_analysis", None)
+    if callable(default_analysis):
+        return default_analysis()
+    return {
+        "domain": ["未分类"],
+        "valence": 0.5,
+        "arousal": 0.3,
+        "tags": [],
+        "suggested_name": "",
+        "importance": 5,
+        "why_remembered": "",
+    }
+
+
+async def analyze_for_write(content: str, **kwargs) -> dict:
+    """hold / grow 写入时取元数据的唯一入口（二改第 8 刀）。
+
+    开关关着（默认）：不调小模型，直接返回本地中性值。
+    开关开着：原样调 dehydrator.analyze，异常照旧抛给调用方，各处原来的
+    降级和报错都不变。
+    """
+    if not write_tagger_enabled():
+        return local_default_analysis()
+    return await rt.dehydrator.analyze(content, **kwargs)
 
 
 async def check_plan_resolution(new_event_text: str, source_bucket_id: str = "") -> None:

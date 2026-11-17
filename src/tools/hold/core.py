@@ -32,7 +32,7 @@ from utils import normalize_memory_title
 from .. import _runtime as rt
 from .._common import (
     merge_or_create, check_duplicate_for, check_plan_resolution,
-    is_exact_duplicate_notice,
+    is_exact_duplicate_notice, analyze_for_write,
 )
 
 
@@ -50,7 +50,7 @@ async def store_core(
 ) -> str:
     metadata_fallback = False
     try:
-        analysis = await rt.dehydrator.analyze(content)
+        analysis = await analyze_for_write(content)   # 二改第 8 刀：默认不调小模型
     except Exception as e:
         metadata_fallback = True
         rt.logger.warning(

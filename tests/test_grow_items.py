@@ -66,6 +66,7 @@ def grow_rt(bucket_mgr, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_items_stored_verbatim_no_digest(grow_rt):
     bucket_mgr, stub = grow_rt
     original = [
@@ -84,6 +85,7 @@ async def test_items_stored_verbatim_no_digest(grow_rt):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_items_share_batch_and_metadata(grow_rt):
     bucket_mgr, stub = grow_rt
     await grow_items(["第一条内容啊啊啊啊啊", "第二条内容哦哦哦哦哦"])
@@ -171,6 +173,7 @@ async def test_dict_item_stores_explicit_why_remembered_on_first_create(grow_rt)
 @pytest.mark.asyncio
 # 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
 @pytest.mark.usefixtures("auto_merge_on")
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
     bucket_mgr, _stub = grow_rt
 
@@ -207,6 +210,7 @@ async def test_digest_reason_is_only_filled_on_second_matching_grow(grow_rt):
 @pytest.mark.asyncio
 # 二改第 7 刀：自动合并默认关，这条测的是合并路径，先打开。
 @pytest.mark.usefixtures("auto_merge_on")
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
     bucket_mgr, stub = grow_rt
     content = "短内容二次命中同一事件"
@@ -227,6 +231,7 @@ async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_digest_merge_never_overwrites_existing_why_remembered(grow_rt):
     bucket_mgr, _stub = grow_rt
     event_content = "旧桶已经有人工写下的保留理由。"
@@ -351,6 +356,7 @@ async def test_concurrent_trace_why_wins_over_stale_grow_merge(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_missing_title_and_importance_are_filled_by_analysis(grow_rt):
     bucket_mgr, _stub = grow_rt
 
@@ -576,6 +582,7 @@ async def test_aligned_multi_event_source_ranges_round_trip(grow_rt):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_dispatch_without_items_unchanged(grow_rt):
     # 不传 items：长文仍走 digest 路径（stub.digest 会炸，grow_core 包成 RuntimeError）
     # → 证明默认路径没变、digest 仍在原路径被调用
@@ -584,6 +591,7 @@ async def test_dispatch_without_items_unchanged(grow_rt):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_grow_digest_failure_hides_provider_detail(grow_rt):
     _bucket_mgr, _stub = grow_rt
     provider_secret = "sk-provider-secret https://provider.invalid/private"
@@ -618,6 +626,7 @@ async def test_grow_digest_failure_hides_provider_detail(grow_rt):
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("write_tagger_on")
 async def test_grow_digest_blames_key_only_when_api_unavailable(grow_rt):
     """只有 API 真的没配好时，才允许把人指向 OMBRE_COMPRESS_API_KEY。"""
     _bucket_mgr, _stub = grow_rt
