@@ -1,0 +1,303 @@
+diff --git a/src/server.py b/src/server.py
+index 81e43e9..8605291 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -718,7 +718,7 @@ async def breath_advanced(
+     date_from: Optional[str] = "",
+     date_to: Optional[str] = "",
+ ) -> str:
+-    """breath 的完整参数版,给需要精细控制的场景用(日常用 breath()/breath_search() 就够了)。不传 query=返回权重最高的未解决记忆;传 query=融合关键词/BM25+语义检索，向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写；max_tokens 不足时整桶省略，绝不截断正文。catalog=True=目录模式:只返回每桶一行元数据(名称|域|重要度,0 LLM 调用,最省 token),适合开新对话先看目录再 breath_search(query=...) 精准拉取,并遵守 domain、tags 与 max_results。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 10000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
++    """breath 的完整参数版,给需要精细控制的场景用(日常用 breath()/breath_search() 就够了)。不传 query=返回权重最高的未解决记忆;传 query=融合关键词/BM25+语义检索，向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写；max_tokens 不足时整桶省略，绝不截断正文。catalog=True=目录模式:只返回每桶一行元数据(名称|域|重要度,0 LLM 调用,最省 token),适合开新对话先看目录再 breath_search(query=...) 精准拉取,并遵守 domain、tags 与 max_results。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 20000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
+     return await _with_notice(
+         _t_breath.dispatch(
+             query=query, max_tokens=max_tokens, domain=domain,
+diff --git a/src/tools/breath/__init__.py b/src/tools/breath/__init__.py
+index 5748287..91dbdcc 100644
+--- a/src/tools/breath/__init__.py
++++ b/src/tools/breath/__init__.py
+@@ -99,7 +99,7 @@ async def dispatch(
+ 
+     surfacing_cfg = rt.config.get("surfacing", {}) or {}
+     default_results = int(surfacing_cfg.get("breath_max_results") or 20)
+-    default_tokens = int(surfacing_cfg.get("breath_max_tokens") or 10000)
++    default_tokens = int(surfacing_cfg.get("breath_max_tokens") or 20000)  # 二改第 8b 刀：10000 → 20000
+     if max_results <= 0:
+         max_results = default_results
+     if max_tokens <= 0:
+diff --git a/src/tools/breath/surface.py b/src/tools/breath/surface.py
+index e30524f..ace03ab 100644
+--- a/src/tools/breath/surface.py
++++ b/src/tools/breath/surface.py
+@@ -20,6 +20,8 @@ tools/breath/surface.py — 无 query 浮现模式
+ - 不调用 touch()：浮现不能重置衰减计时器
+ - 不返回 feel / letter / archived（专用通道有自己的入口）
+ - active plan 例外（二改）：紧跟核心准则单独一段，独立预算 breath_plan_max_tokens
++- 核心准则独立预算（二改第 8b 刀）：surfacing.breath_core_max_tokens（默认 6000），
++  不再占浮现记忆的预算；放不下全文的准则退成一行开头，不截断正文；设成 0 回到共用
+ - 不做关键词检索（那是 search.py 的事）
+ 
+ 对外暴露：surface_default(max_results, max_tokens, tag_filter) → str
+@@ -107,6 +109,16 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     pinned_results = []
+     token_budget = max_tokens
+     primary_omitted = 0
++    # 二改第 8b 刀：核心准则用独立预算 surfacing.breath_core_max_tokens（默认 6000），
++    # 不再先吃掉浮现记忆的 max_tokens。放不下全文的准则退成一行开头（照计划段的做法），
++    # 不截断正文。设成 0 回到旧行为：准则和浮现记忆共用 max_tokens，放不下的计入省略数。
++    try:
++        core_budget = int(surfacing_cfg.get("breath_core_max_tokens", 6000))
++    except (TypeError, ValueError, OverflowError):
++        core_budget = 6000
++    core_budget = max(0, min(20_000, core_budget))
++    core_separate = core_budget > 0
++    core_title_lines: list[str] = []
+     for b in pinned_buckets:
+         try:
+             rendered, entry_tokens = render_stored_bucket(
+@@ -114,6 +126,16 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+                 f"📌 [核心准则] [bucket_id:{b['id']}]",
+                 _footprint(b),
+             )
++            if core_separate:
++                if entry_tokens <= core_budget:
++                    pinned_results.append(rendered)
++                    core_budget -= entry_tokens
++                    continue
++                first = strip_wikilinks(str(b.get("content") or "")).strip().split("\n", 1)[0]
++                core_title_lines.append(
++                    f"📌 [bucket_id:{b['id']}] {first[:50]}" + ("…" if len(first) > 50 else "")
++                )
++                continue
+             if entry_tokens > token_budget:
+                 primary_omitted += 1
+                 continue
+@@ -298,7 +320,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+             rt.logger.warning(f"Failed to render surfaced bucket / 浮现渲染失败: {e}")
+             continue
+ 
+-    if not pinned_results and not dynamic_results:
++    if not pinned_results and not core_title_lines and not dynamic_results:
+         if primary_omitted:
+             return _budget_notice(
+                 omitted=primary_omitted,
+@@ -405,8 +427,15 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     parts = []
+     if core_filter_notice:
+         parts.append(core_filter_notice)
+-    if pinned_results:
+-        parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
++    if pinned_results or core_title_lines:
++        core_block = "=== 核心准则 ===\n" + "\n---\n".join(pinned_results)
++        if core_title_lines:
++            core_block += (
++                ("\n\n" if pinned_results else "")
++                + "（核心准则预算放不下全文，只列开头：）\n"
++                + "\n".join(core_title_lines)
++            )
++        parts.append(core_block)
+     if plan_results or plan_title_lines:
+         plan_block = "=== 我的计划（往前看）===\n" + "\n---\n".join(plan_results)
+         if plan_title_lines:
+diff --git a/tests/test_breath_core_budget_switch.py b/tests/test_breath_core_budget_switch.py
+new file mode 100644
+index 0000000..aaed63e
+--- /dev/null
++++ b/tests/test_breath_core_budget_switch.py
+@@ -0,0 +1,185 @@
++"""二改第 8b 刀：breath 浮现预算 10000 → 20000，核心准则单独算预算。
++
++原来核心准则（pinned）和浮现记忆共用一个 max_tokens（默认 10000）。准则先装，
++装完剩下的才给浮现记忆。2026-11-18 线上实测：准则 16 条约三千五，浮现 20 个
++候选里有 8 个放不下。
++
++现在：
++- 准则用 surfacing.breath_core_max_tokens（默认 6000），不再占浮现的预算；
++  放不下全文的准则退成一行开头（照计划段的做法），不截断正文。
++- 设成 0 回到旧行为：共用 max_tokens，放不下的计入「主要浮现记忆」省略数。
++- breath_max_tokens 没配置时的默认值从 10000 改成 20000。
++"""
++
++from unittest.mock import MagicMock
++
++import pytest
++
++import tools._runtime as rt
++from tools.breath import dispatch
++from tools.breath._verbatim import render_stored_bucket
++
++
++class _NoopDecay:
++    is_running = True
++
++    async def ensure_started(self):
++        return None
++
++    def calculate_score(self, meta):
++        return float(meta.get("importance") or 5)
++
++
++class _DisabledEmbedding:
++    enabled = False
++
++
++class _Manager:
++    def __init__(self, buckets):
++        self.buckets = list(buckets)
++
++    async def list_all(self, include_archive=False):
++        return list(self.buckets)
++
++    async def search(self, query, **kwargs):
++        return list(self.buckets)
++
++    async def touch_many(self, bucket_ids, ripple=False):
++        return None
++
++    async def get_stats(self):
++        return {"permanent_count": 0, "dynamic_count": len(self.buckets)}
++
++
++def _install(buckets, surfacing=None):
++    rt.config = {"surfacing": dict(surfacing or {})}
++    rt.bucket_mgr = _Manager(buckets)
++    rt.decay_engine = _NoopDecay()
++    rt.dehydrator = MagicMock()
++    rt.embedding_engine = _DisabledEmbedding()
++    rt.logger = MagicMock()
++    rt.fire_webhook = None
++    rt.mark_op = None
++    rt.record_v3_tool_event = lambda *_args, **_kwargs: None
++
++
++def _pinned(bucket_id, content):
++    return {
++        "id": bucket_id,
++        "content": content,
++        "metadata": {"type": "dynamic", "pinned": True, "importance": 10, "domain": []},
++    }
++
++
++def _memory(bucket_id, content, importance=9):
++    return {
++        "id": bucket_id,
++        "content": content,
++        "metadata": {
++            "type": "dynamic",
++            "importance": importance,
++            "activation_count": 1,
++            "domain": [],
++        },
++    }
++
++
++def _cost(bucket, header):
++    _, tokens = render_stored_bucket(bucket, header, "👣 Footprint：暂时无法读取")
++    return tokens
++
++
++@pytest.fixture(autouse=True)
++def _no_randomness(monkeypatch):
++    monkeypatch.setattr("tools.breath.surface.random.shuffle", lambda items: None)
++    monkeypatch.setattr("tools.breath.surface.random.random", lambda: 1.0)
++
++
++@pytest.mark.asyncio
++async def test_default_core_does_not_eat_memory_budget():
++    core = _pinned("core", "核心准则正文" * 200)
++    mem = _memory("mem", "今天的一件事" * 50)
++    _install([core, mem])
++    mem_cost = _cost(mem, "[权重:9.00] [bucket_id:mem]")
++
++    output = await dispatch(max_tokens=mem_cost)
++
++    assert "=== 核心准则 ===" in output
++    assert core["content"] in output
++    assert "[bucket_id:mem]" in output
++    assert mem["content"] in output
++    assert "token 预算不足" not in output
++
++
++@pytest.mark.asyncio
++async def test_switch_zero_restores_shared_budget():
++    core = _pinned("core", "核心准则正文" * 20)
++    mem = _memory("mem", "今天的一件事" * 50)
++    _install([core, mem], {"breath_core_max_tokens": 0})
++    core_cost = _cost(core, "📌 [核心准则] [bucket_id:core]")
++    mem_cost = _cost(mem, "[权重:9.00] [bucket_id:mem]")
++
++    # 准则先装进共用预算，剩下的不够放浮现记忆
++    output = await dispatch(max_tokens=core_cost + mem_cost - 1)
++
++    assert core["content"] in output
++    assert "[bucket_id:mem]" not in output
++    assert "token 预算不足" in output
++
++
++@pytest.mark.asyncio
++async def test_core_over_own_budget_falls_back_to_one_line_without_truncation():
++    short = _pinned("short", "短准则。")
++    long_body = "第一行是开头\n" + "后面很长的准则正文" * 300
++    long = _pinned("long", long_body)
++    mem = _memory("mem", "今天的一件事")
++    short_cost = _cost(short, "📌 [核心准则] [bucket_id:short]")
++    _install([short, long, mem], {"breath_core_max_tokens": short_cost})
++
++    output = await dispatch(max_tokens=20000)
++
++    assert short["content"] in output
++    assert "（核心准则预算放不下全文，只列开头：）" in output
++    assert "📌 [bucket_id:long] 第一行是开头" in output
++    assert "后面很长的准则正文" not in output
++    assert "[bucket_id:mem]" in output
++    # 退成一行的准则不算进浮现记忆的省略数
++    assert "token 预算不足" not in output
++
++
++@pytest.mark.asyncio
++async def test_bad_core_budget_value_falls_back_to_default():
++    core = _pinned("core", "核心准则正文" * 200)
++    mem = _memory("mem", "今天的一件事" * 50)
++    _install([core, mem], {"breath_core_max_tokens": "不是数字"})
++    mem_cost = _cost(mem, "[权重:9.00] [bucket_id:mem]")
++
++    output = await dispatch(max_tokens=mem_cost)
++
++    assert core["content"] in output
++    assert "[bucket_id:mem]" in output
++    assert "token 预算不足" not in output
++
++
++@pytest.mark.asyncio
++async def test_memory_default_budget_is_20000():
++    # 每条约 1500 token，十条约一万五：旧默认 10000 装不下，新默认 20000 装得下
++    buckets = [_memory(f"m{i}", "很长的一天" * 200, importance=9) for i in range(10)]
++    _install(buckets)
++
++    output = await dispatch()
++
++    for i in range(10):
++        assert f"[bucket_id:m{i}]" in output
++    assert "token 预算不足" not in output
++
++
++@pytest.mark.asyncio
++async def test_configured_memory_budget_still_wins():
++    buckets = [_memory(f"m{i}", "很长的一天" * 200, importance=9) for i in range(10)]
++    _install(buckets, {"breath_max_tokens": 10000})
++
++    output = await dispatch()
++
++    assert "token 预算不足" in output
++    assert "/10000 token" in output
+diff --git a/tests/test_breath_verbatim_patch.py b/tests/test_breath_verbatim_patch.py
+index 8f17519..5c41919 100644
+--- a/tests/test_breath_verbatim_patch.py
++++ b/tests/test_breath_verbatim_patch.py
+@@ -245,6 +245,7 @@ async def test_default_surface_skips_oversized_core_and_keeps_later_core(monkeyp
+     }
+     manager = OrderedBucketManager([oversized, later])
+     _install_runtime(manager)
++    rt.config["surfacing"]["breath_core_max_tokens"] = 0  # 二改第 8b 刀：回到准则与浮现共用预算
+     monkeypatch.setattr("tools.breath.surface.random.random", lambda: 1.0)
+     _, later_cost = render_stored_bucket(
+         later,

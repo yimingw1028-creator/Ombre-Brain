@@ -20,6 +20,8 @@ tools/breath/surface.py — 无 query 浮现模式
 - 不调用 touch()：浮现不能重置衰减计时器
 - 不返回 feel / letter / archived（专用通道有自己的入口）
 - active plan 例外（二改）：紧跟核心准则单独一段，独立预算 breath_plan_max_tokens
+- 核心准则独立预算（二改第 8b 刀）：surfacing.breath_core_max_tokens（默认 6000），
+  不再占浮现记忆的预算；放不下全文的准则退成一行开头，不截断正文；设成 0 回到共用
 - 不做关键词检索（那是 search.py 的事）
 
 对外暴露：surface_default(max_results, max_tokens, tag_filter) → str
@@ -107,6 +109,16 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     pinned_results = []
     token_budget = max_tokens
     primary_omitted = 0
+    # 二改第 8b 刀：核心准则用独立预算 surfacing.breath_core_max_tokens（默认 6000），
+    # 不再先吃掉浮现记忆的 max_tokens。放不下全文的准则退成一行开头（照计划段的做法），
+    # 不截断正文。设成 0 回到旧行为：准则和浮现记忆共用 max_tokens，放不下的计入省略数。
+    try:
+        core_budget = int(surfacing_cfg.get("breath_core_max_tokens", 6000))
+    except (TypeError, ValueError, OverflowError):
+        core_budget = 6000
+    core_budget = max(0, min(20_000, core_budget))
+    core_separate = core_budget > 0
+    core_title_lines: list[str] = []
     for b in pinned_buckets:
         try:
             rendered, entry_tokens = render_stored_bucket(
@@ -114,6 +126,16 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                 f"📌 [核心准则] [bucket_id:{b['id']}]",
                 _footprint(b),
             )
+            if core_separate:
+                if entry_tokens <= core_budget:
+                    pinned_results.append(rendered)
+                    core_budget -= entry_tokens
+                    continue
+                first = strip_wikilinks(str(b.get("content") or "")).strip().split("\n", 1)[0]
+                core_title_lines.append(
+                    f"📌 [bucket_id:{b['id']}] {first[:50]}" + ("…" if len(first) > 50 else "")
+                )
+                continue
             if entry_tokens > token_budget:
                 primary_omitted += 1
                 continue
@@ -298,7 +320,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             rt.logger.warning(f"Failed to render surfaced bucket / 浮现渲染失败: {e}")
             continue
 
-    if not pinned_results and not dynamic_results:
+    if not pinned_results and not core_title_lines and not dynamic_results:
         if primary_omitted:
             return _budget_notice(
                 omitted=primary_omitted,
@@ -405,8 +427,15 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     parts = []
     if core_filter_notice:
         parts.append(core_filter_notice)
-    if pinned_results:
-        parts.append("=== 核心准则 ===\n" + "\n---\n".join(pinned_results))
+    if pinned_results or core_title_lines:
+        core_block = "=== 核心准则 ===\n" + "\n---\n".join(pinned_results)
+        if core_title_lines:
+            core_block += (
+                ("\n\n" if pinned_results else "")
+                + "（核心准则预算放不下全文，只列开头：）\n"
+                + "\n".join(core_title_lines)
+            )
+        parts.append(core_block)
     if plan_results or plan_title_lines:
         plan_block = "=== 我的计划（往前看）===\n" + "\n---\n".join(plan_results)
         if plan_title_lines:

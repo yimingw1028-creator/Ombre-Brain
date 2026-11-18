@@ -245,6 +245,7 @@ async def test_default_surface_skips_oversized_core_and_keeps_later_core(monkeyp
     }
     manager = OrderedBucketManager([oversized, later])
     _install_runtime(manager)
+    rt.config["surfacing"]["breath_core_max_tokens"] = 0  # 二改第 8b 刀：回到准则与浮现共用预算
     monkeypatch.setattr("tools.breath.surface.random.random", lambda: 1.0)
     _, later_cost = render_stored_bucket(
         later,
