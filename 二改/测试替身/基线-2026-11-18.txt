@@ -86,6 +86,7 @@ tests/test_backup_import_safety.py exit=0 3 passed
 tests/test_bm25_async_rebuild.py exit=0 4 passed
 tests/test_bounded_log_tail.py exit=0 3 passed
 tests/test_breath_catalog.py exit=0 9 passed
+tests/test_breath_core_budget_switch.py exit=0 6 passed
 tests/test_breath_digested_visibility_regression.py exit=0 5 passed
 tests/test_breath_hook_security.py exit=0 16 passed
 tests/test_breath_mcp_compat_regression.py exit=2 1 error
