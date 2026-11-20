@@ -471,6 +471,16 @@ _VECTOR_RECALL_THRESHOLD = 0.65  # 纯语义候选进入结果池的最低余弦
 _RESOLVED_RANK_PENALTY = 0.3   # resolved 桶仅在排序时降权
 _LITERAL_MATCH_BONUS = 25.0    # 查询串原样命中 name/tags/domain/正文时的召回加分（修短查询召回）
 
+
+def _meaning_texts(meta: dict) -> list[str]:
+    """二改第 9a 刀：桶头部 meaning 的每一条（list[str]，旧数据可能是单个 str）。"""
+    raw = meta.get("meaning")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [m for m in raw if isinstance(m, str) and m.strip()]
+
 # topic/emotion/time/touch 四个评分维度的纯函数 + 权重常量已拆到
 # ombrebrain.retrieval.bucket_scoring（search() 和 _calc_*_score wrapper 都从那里导入）。
 
@@ -3404,6 +3414,8 @@ class BucketManager:
 
         # --- Layer 2: weighted multi-dim ranking ---
         # --- 第二层：多维加权精排 ---
+        # 二改第 9a 刀：字面命中也看 meaning。开关 matching.literal_meaning。
+        include_meaning = self._literal_meaning_enabled()
         scored = []
         for bucket in candidates:
             meta = bucket.get("metadata", {})
@@ -3419,6 +3431,11 @@ class BucketManager:
                         bucket.get("content", "") or "",
                     ]).lower()
                     literal_hit = q_norm in hay
+                    if not literal_hit and include_meaning:
+                        # 每条 meaning 单独比，不和正文拼在一起，免得查询串跨界凑出命中。
+                        literal_hit = any(
+                            q_norm in m.lower() for m in _meaning_texts(meta)
+                        )
 
                 # Dim 1: topic relevance (fuzzy text, 0~1)
                 topic_score = self._calc_topic_score(query, bucket)
@@ -3507,6 +3524,22 @@ class BucketManager:
     # wrapper 方法 —— 测试和历史调用方一直用 bucket_mgr._calc_xxx_score(...)
     # 这种实例方法写法，wrapper 保持该接口不变，同时让实现本身可独立单测/复用。
     # ---------------------------------------------------------
+    def _literal_meaning_enabled(self) -> bool:
+        """二改第 9a 刀开关 matching.literal_meaning，默认开。
+
+        读不到、写错了都按默认（开）；只有明确写 false/0/no/off 才回到旧行为。
+        """
+        cfg = self.config if isinstance(self.config, dict) else {}
+        section = cfg.get("matching")
+        if not isinstance(section, dict):
+            return True
+        value = section.get("literal_meaning", True)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in ("0", "false", "no", "off")
+        return True
+
     def _calc_topic_score(self, query: str, bucket: dict) -> float:
         return calc_topic_score(query, bucket, content_weight=self.content_weight)
 
