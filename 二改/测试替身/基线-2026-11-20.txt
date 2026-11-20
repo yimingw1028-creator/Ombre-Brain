@@ -163,6 +163,7 @@ tests/test_letter_dashboard_regressions.py exit=0 3 passed
 tests/test_letter_read_regression.py exit=0 4 passed
 tests/test_letter_time_lock.py exit=1 6 failed, 18 passed
 tests/test_list_all_cache.py exit=0 12 passed
+tests/test_literal_meaning_switch.py exit=0 19 passed
 tests/test_llm_quality.py exit=0 7 skipped
 tests/test_login_rate_limit.py exit=0 9 passed
 tests/test_maintenance_tool_safety.py exit=0 3 passed
