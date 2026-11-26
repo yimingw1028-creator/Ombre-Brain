@@ -145,6 +145,7 @@ tests/test_github_sync_long_path.py exit=1 1 failed
 tests/test_github_sync_memory_bounds.py exit=1 2 failed, 7 passed
 tests/test_github_sync_zero_commit.py exit=1 1 failed
 tests/test_grow_items.py exit=0 29 passed
+tests/test_grow_items_meaning.py exit=0 15 passed
 tests/test_hnf1_pas_partition_checker.py exit=0 63 passed
 tests/test_hot_update_concurrency.py exit=124 .
 tests/test_hot_update_persistence.py exit=0 8 passed

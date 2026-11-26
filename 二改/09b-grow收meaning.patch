@@ -1,0 +1,272 @@
+diff --git a/src/server.py b/src/server.py
+index c9ee841..1f8cc47 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -778,7 +778,7 @@ async def grow(
+ ) -> str:
+     """仅在对话中已明确要求整理并写入长期记忆时调用，不要根据普通聊天自行推断写入意图。一次把几件事存进长期记忆：先自己分好条，用 items 传入，每条各自新建、不并进旧桶(同一件事的后续要接进旧桶,用 trace)。只传一段长 content、不带 items 时不会写入，只返回一句提示——系统不再替你拆分和改写。短内容(<30 字)走 hold 单条快速路径,原样存成一条。
+ 
+-    items 的写法:可传字符串列表，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","source_ranges":[[1,20]]}]。正文逐字入库，写入不经过别的模型：你带的字段原样生效；没带的用中性值(标题留空、无标签、importance 5、valence 0.5、arousal 0.3)，主题域不带就是“未分类”。正文与已有的桶逐字相同时不重复写入。why_remembered 你带了就保存，系统不会替你生成。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
++    items 的写法:可传字符串列表，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","meaning":"这件事像什么、当时是什么处境(可选)","source_ranges":[[1,20]]}]。正文逐字入库，写入不经过别的模型：你带的字段原样生效；没带的用中性值(标题留空、无标签、importance 5、valence 0.5、arousal 0.3)，主题域不带就是“未分类”。正文与已有的桶逐字相同时不重复写入。why_remembered 你带了就保存，系统不会替你生成。meaning 可选、一条只收一句(字符串，不超过 2000 字，超了整批不写)：写这件事像什么、当时是什么处境，不是再写一遍发生了什么，大多数条目不需要；带了就和 hold 的 meaning 一样存下，能被关键词搜到。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
+     return await _with_notice(
+         _t_grow.dispatch(content, items=items, test_data=test_data),
+         op="grow",
+diff --git a/src/tools/_common.py b/src/tools/_common.py
+index 0534ab1..646b2c6 100644
+--- a/src/tools/_common.py
++++ b/src/tools/_common.py
+@@ -67,9 +67,12 @@ _DEFAULT_MAX_QUERY_BYTES = 16 * 1024
+ _DEFAULT_MAX_METADATA_BYTES = 16 * 1024
+ _DEFAULT_MAX_GROW_ITEMS = 100
+ _WHY_REMEMBERED_MAX_CHARS = 500
++# 二改第 9b 刀：grow(items) 每条可以带一句 meaning。上限和 bucket_manager 的
++# _MEANING_ITEM_MAX 一样；那边超长会悄悄截断，grow 这里改成先拒绝，不改写入方的话。
++_GROW_MEANING_MAX_CHARS = 2000
+ _GROW_ITEM_FIELDS = frozenset({
+     "content", "title", "name", "tags", "importance", "domain",
+-    "valence", "arousal", "source_ranges", "why_remembered",
++    "valence", "arousal", "source_ranges", "why_remembered", "meaning",
+ })
+ 
+ # --- importance 审计范围排除的类型（is_importance_audit_candidate 复用）---
+@@ -408,6 +411,19 @@ def check_grow_items_payload(items: list) -> str | None:
+                         f"grow items 第 {index} 项 why_remembered "
+                         f"不能超过 {_WHY_REMEMBERED_MAX_CHARS} 个字符。"
+                     )
++            # 二改第 9b 刀：meaning 一条只收一句（字符串），超长整批拒绝，不截断。
++            raw_meaning = item.get("meaning")
++            if raw_meaning is not None:
++                if not isinstance(raw_meaning, str):
++                    return (
++                        f"grow items 第 {index} 项 meaning 必须是字符串"
++                        "（一条只收一句，要补第二句用 trace 的 meaning_append）。"
++                    )
++                if len(raw_meaning.strip()) > _GROW_MEANING_MAX_CHARS:
++                    return (
++                        f"grow items 第 {index} 项 meaning "
++                        f"不能超过 {_GROW_MEANING_MAX_CHARS} 个字符，未创建任何桶。"
++                    )
+             for field in ("tags", "domain"):
+                 raw_list = item.get(field)
+                 if raw_list is not None and not (
+@@ -444,7 +460,7 @@ def check_grow_items_payload(items: list) -> str | None:
+                 if field == "content" or item.get(field) is None:
+                     continue
+                 metadata_value = item[field]
+-                if field == "why_remembered":
++                if field in ("why_remembered", "meaning"):
+                     metadata_value = metadata_value.strip()
+                 metadata_values.append(metadata_value)
+         else:
+diff --git a/src/tools/grow/core.py b/src/tools/grow/core.py
+index ab9446f..7162e96 100644
+--- a/src/tools/grow/core.py
++++ b/src/tools/grow/core.py
+@@ -172,6 +172,8 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
+             item["content"] = s
+             if isinstance(item.get("why_remembered"), str):
+                 item["why_remembered"] = item["why_remembered"].strip()
++            if isinstance(item.get("meaning"), str):   # 二改第 9b 刀
++                item["meaning"] = item["meaning"].strip()
+         else:
+             s = ""
+         if s:
+@@ -283,6 +285,7 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
+                 title=final_title,
+                 why_remembered=why_remembered,
+                 merge_why_remembered=why_remembered,
++                meaning=item.get("meaning") or "",   # 二改第 9b 刀：一句处境，原样交给写入
+                 source_refs=source_refs,
+                 source_tool="grow",
+                 grow_batch_id=batch_id,
+diff --git a/tests/test_grow_items_meaning.py b/tests/test_grow_items_meaning.py
+new file mode 100644
+index 0000000..614ca3e
+--- /dev/null
++++ b/tests/test_grow_items_meaning.py
+@@ -0,0 +1,185 @@
++"""二改第 9b 刀：grow(items) 的每一条可以带一句 meaning。
++
++原来 items 只认 10 个字段，带了 meaning 整批被拒（「包含未支持字段: meaning」），
++一条都不写。现在：
++- meaning 一条只收一句（字符串），去掉首尾空白后原样交给写入，和 hold 的 meaning 一样存；
++- 空的等于没带；
++- 不是字符串、或超过 2000 字：整批拒绝并说明，一条都不写（hold 那边超长是悄悄截断，
++  grow 这里不改写入方的话）；
++- 不带 meaning 的条目一点不变。
++不加开关（June 11-26 点头，硬规则第 8 条的例外），退路是 Revert。
++"""
++
++import pytest
++
++import bucket_manager as bm_module
++from bucket_manager import BucketManager
++from tools import _common as common
++from tools import _runtime as rt
++from tools.grow import core as grow_core
++from tools.grow import dispatch
++
++
++class _Logger:
++    def info(self, *_args, **_kwargs):
++        pass
++
++    def warning(self, *_args, **_kwargs):
++        pass
++
++    error = warning
++
++
++class _NoModel:
++    api_available = True
++
++    def _default_analysis(self):
++        return {
++            "domain": ["未分类"], "valence": 0.5, "arousal": 0.3, "tags": [],
++            "suggested_name": "", "importance": 5, "why_remembered": "",
++        }
++
++
++class _NoopDecay:
++    async def ensure_started(self):
++        return None
++
++
++async def _background(*_args, **_kwargs):
++    return None
++
++
++def _close_task(coro):
++    coro.close()
++    return None
++
++
++@pytest.fixture
++def manager(tmp_path, monkeypatch):
++    mgr = BucketManager({"buckets_dir": str(tmp_path / "vault")}, embedding_engine=None)
++    monkeypatch.setattr(rt, "bucket_mgr", mgr, raising=False)
++    monkeypatch.setattr(rt, "embedding_engine", None, raising=False)
++    monkeypatch.setattr(rt, "dehydrator", _NoModel(), raising=False)
++    monkeypatch.setattr(rt, "config", {}, raising=False)
++    monkeypatch.setattr(rt, "logger", _Logger(), raising=False)
++    monkeypatch.setattr(rt, "decay_engine", _NoopDecay(), raising=False)
++    monkeypatch.setattr(grow_core, "check_plan_resolution", _background)
++    monkeypatch.setattr(grow_core, "check_duplicate_for", _background)
++    monkeypatch.setattr(grow_core.asyncio, "create_task", _close_task)
++    return mgr
++
++
++async def _by_title(mgr):
++    buckets = await mgr.list_all(include_archive=False)
++    return {b["metadata"].get("title") or b["metadata"].get("name"): b for b in buckets}
++
++
++_SITUATION = "像那天她把蓝帽子戴反了也没说，我后来才看懂的那种将错就错"
++
++
++# ---------------------------------------------------------
++# 收下来、原样存
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_meaning_is_stored_like_hold(manager):
++    out = await dispatch(items=[
++        {"title": "有处境的一条", "content": "2026-11-26 第一条正文。", "meaning": f"  {_SITUATION}  "},
++        {"title": "没处境的一条", "content": "2026-11-26 第二条正文。"},
++    ])
++
++    assert "2条(预拆分·逐字)|新2合0" in out
++    buckets = await _by_title(manager)
++    assert buckets["有处境的一条"]["metadata"]["meaning"] == [_SITUATION]
++    assert "meaning" not in buckets["没处境的一条"]["metadata"]
++
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("empty", ["", "   ", "\n"])
++async def test_empty_meaning_is_the_same_as_none(manager, empty):
++    out = await dispatch(items=[{"title": "空的", "content": "2026-11-26 正文。", "meaning": empty}])
++
++    assert "新1合0" in out
++    bucket = (await _by_title(manager))["空的"]
++    assert "meaning" not in bucket["metadata"]
++
++
++@pytest.mark.asyncio
++async def test_exactly_2000_chars_is_kept_whole(manager):
++    meaning = "处" * common._GROW_MEANING_MAX_CHARS
++    out = await dispatch(items=[{"title": "正好", "content": "2026-11-26 正文。", "meaning": meaning}])
++
++    assert "新1合0" in out
++    bucket = (await _by_title(manager))["正好"]
++    assert bucket["metadata"]["meaning"] == [meaning]
++
++
++@pytest.mark.asyncio
++async def test_meaning_from_grow_is_found_by_keyword(manager):
++    """9a 的路：只写在 meaning 里的词，关键词搜得到。"""
++    await dispatch(items=[{"title": "蓝帽子", "content": "2026-11-26 她回来讲了路上的事。", "meaning": _SITUATION}])
++
++    hits = await manager.search("将错就错")
++    assert [b["metadata"].get("title") for b in hits] == ["蓝帽子"]
++
++
++def test_limit_matches_bucket_manager():
++    """grow 先拒绝的线，和存盘时会截断的线是同一条。"""
++    assert common._GROW_MEANING_MAX_CHARS == bm_module._MEANING_ITEM_MAX
++
++
++# ---------------------------------------------------------
++# 不收的：整批拒绝，一条都不写
++# ---------------------------------------------------------
++
++@pytest.mark.asyncio
++@pytest.mark.parametrize("bad", [["一句", "两句"], 5, {"text": "一句"}, True])
++async def test_non_string_meaning_rejects_the_whole_batch(manager, bad):
++    out = await dispatch(items=[
++        {"title": "好的", "content": "2026-11-26 好的一条。"},
++        {"title": "坏的", "content": "2026-11-26 坏的一条。", "meaning": bad},
++    ])
++
++    assert "第 2 项 meaning 必须是字符串" in out
++    assert await manager.list_all(include_archive=False) == []
++
++
++@pytest.mark.asyncio
++async def test_too_long_meaning_rejects_the_whole_batch(manager):
++    meaning = "处" * (common._GROW_MEANING_MAX_CHARS + 1)
++    out = await dispatch(items=[
++        {"title": "好的", "content": "2026-11-26 好的一条。"},
++        {"title": "长的", "content": "2026-11-26 长的一条。", "meaning": meaning},
++    ])
++
++    assert "第 2 项 meaning 不能超过 2000 个字符" in out
++    assert await manager.list_all(include_archive=False) == []
++
++
++@pytest.mark.asyncio
++async def test_surrounding_whitespace_does_not_count_toward_the_limit(manager):
++    meaning = "  " + "处" * common._GROW_MEANING_MAX_CHARS + "\n"
++    out = await dispatch(items=[{"title": "带空白", "content": "2026-11-26 正文。", "meaning": meaning}])
++
++    assert "新1合0" in out
++
++
++@pytest.mark.asyncio
++async def test_misspelled_field_is_still_rejected(manager):
++    out = await dispatch(items=[{"title": "拼错", "content": "2026-11-26 正文。", "meanings": "一句"}])
++
++    assert "未支持字段: meanings" in out
++    assert await manager.list_all(include_archive=False) == []
++
++
++@pytest.mark.asyncio
++async def test_meaning_counts_toward_the_batch_metadata_cap(manager):
++    """已知的边界：一批所有元数据共用 16 KB，meaning 也算在里面。"""
++    items = [
++        {"title": f"第{i}条", "content": f"2026-11-26 第 {i} 条。", "meaning": "处" * 1900}
++        for i in range(4)
++    ]
++    out = await dispatch(items=items)
++
++    assert "元数据过大" in out
++    assert await manager.list_all(include_archive=False) == []
