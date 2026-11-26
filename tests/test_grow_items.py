@@ -231,6 +231,9 @@ async def test_shortpath_reason_is_only_filled_on_second_matching_grow(grow_rt):
 
 
 @pytest.mark.asyncio
+# 复检小修：这条测的是合并路径。自动合并关着时它走的是「逐字相同、没有写入」，
+# 汇总不再把那条算成「合」，所以先把合并打开，让它回到本来要测的路。
+@pytest.mark.usefixtures("auto_merge_on")
 @pytest.mark.usefixtures("write_tagger_on")
 async def test_digest_merge_never_overwrites_existing_why_remembered(grow_rt):
     bucket_mgr, _stub = grow_rt

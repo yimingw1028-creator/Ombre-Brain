@@ -1389,11 +1389,11 @@ def _config_flag(section: str, key: str, default: bool) -> bool:
     section_cfg = (getattr(rt, "config", None) or {}).get(section)
     if not isinstance(section_cfg, dict):
         return default
-    value = section_cfg.get(key, default)
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in ("1", "true", "yes", "on")
+    value = section_cfg.get(key)
+    # 复检小修：只认布尔和字符串（true/false、yes/no、on/off、1/0）。数字、认不出的
+    # 字符串、没写，都按 default。原来认不出的字符串一律当「关」，默认是开的开关会被误关。
+    if isinstance(value, (bool, str)):
+        return parse_bool(value, default=default)
     return default
 
 

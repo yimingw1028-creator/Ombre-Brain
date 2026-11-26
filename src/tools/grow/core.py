@@ -121,10 +121,13 @@ async def grow_core(content: str, test_data: bool = False) -> str:
     results = []
     created = 0
     merged = 0
+    duplicates = 0   # 复检小修：逐字相同、没有写入的，单独数
     embed_warnings = []
     for outcome in outcomes:
         results.append(outcome["line"])
-        if outcome.get("merged") is True:
+        if is_exact_duplicate_notice(outcome.get("embed_warn")):
+            duplicates += 1   # 复检小修：它什么都没合并，不算进「合」
+        elif outcome.get("merged") is True:
             merged += 1
         elif outcome.get("merged") is False:
             created += 1
@@ -136,9 +139,11 @@ async def grow_core(content: str, test_data: bool = False) -> str:
             asyncio.create_task(check_duplicate_for(*dup_check))
 
     asyncio.create_task(check_plan_resolution(content))
-    summary = f"{len(items)}条|新{created}合{merged} batch:{batch_id}\n" + "\n".join(results)
-    if embed_warnings:
-        summary += f"\n⚠️ {embed_warnings[0]}"
+    dup_note = f"已存在{duplicates}" if duplicates else ""
+    summary = f"{len(items)}条|新{created}合{merged}{dup_note} batch:{batch_id}\n" + "\n".join(results)
+    # 复检小修：不同的提示都列出来。只给第一条时，「已存在」的说明会盖掉「向量没建上」。
+    for warning in embed_warnings:
+        summary += f"\n⚠️ {warning}"
     return summary
 
 
@@ -305,11 +310,14 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
     results = []
     created = 0
     merged = 0
+    duplicates = 0   # 复检小修：逐字相同、没有写入的，单独数
     embed_warnings = []
     metadata_fallback = False
     for outcome in outcomes:
         results.append(outcome["line"])
-        if outcome.get("merged") is True:
+        if is_exact_duplicate_notice(outcome.get("embed_warn")):
+            duplicates += 1   # 复检小修：它什么都没合并，不算进「合」
+        elif outcome.get("merged") is True:
             merged += 1
         elif outcome.get("merged") is False:
             created += 1
@@ -323,9 +331,11 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
             asyncio.create_task(check_duplicate_for(*dup_check))
 
     asyncio.create_task(check_plan_resolution("\n".join(item["content"] for item in clean)))
-    summary = f"{len(clean)}条(预拆分·逐字)|新{created}合{merged} batch:{batch_id}\n" + "\n".join(results)
-    if embed_warnings:
-        summary += f"\n⚠️ {embed_warnings[0]}"
+    dup_note = f"已存在{duplicates}" if duplicates else ""
+    summary = f"{len(clean)}条(预拆分·逐字)|新{created}合{merged}{dup_note} batch:{batch_id}\n" + "\n".join(results)
+    # 复检小修：不同的提示都列出来。只给第一条时，「已存在」的说明会盖掉「向量没建上」。
+    for warning in embed_warnings:
+        summary += f"\n⚠️ {warning}"
     if metadata_fallback:
         summary += "\n⚠️ 打标 API 暂不可用：正文已逐字保存，未做任何压缩；元数据暂用本地中性值。"
         if any(not (item.get("title") or "").strip() for item in clean):
