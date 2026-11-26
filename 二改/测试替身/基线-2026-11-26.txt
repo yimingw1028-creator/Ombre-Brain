@@ -207,6 +207,7 @@ tests/test_restart_api.py exit=0 2 passed
 tests/test_retrieval_eval.py exit=0 7 passed
 tests/test_retrieval_resilience.py exit=0 7 passed
 tests/test_retrieval_scoring_phase9.py exit=0 7 passed
+tests/test_review_small_fixes.py exit=0 60 passed
 tests/test_rust_kernel_phase6a.py exit=0 2 passed
 tests/test_scoring.py exit=1 18 passed, 9 errors
 tests/test_search_similar_vectorized.py exit=0 6 passed
