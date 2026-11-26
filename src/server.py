@@ -778,7 +778,7 @@ async def grow(
 ) -> str:
     """仅在对话中已明确要求整理并写入长期记忆时调用，不要根据普通聊天自行推断写入意图。一次把几件事存进长期记忆：先自己分好条，用 items 传入，每条各自新建、不并进旧桶(同一件事的后续要接进旧桶,用 trace)。只传一段长 content、不带 items 时不会写入，只返回一句提示——系统不再替你拆分和改写。短内容(<30 字)走 hold 单条快速路径,原样存成一条。
 
-    items 的写法:可传字符串列表，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","source_ranges":[[1,20]]}]。正文逐字入库，写入不经过别的模型：你带的字段原样生效；没带的用中性值(标题留空、无标签、importance 5、valence 0.5、arousal 0.3)，主题域不带就是“未分类”。正文与已有的桶逐字相同时不重复写入。why_remembered 你带了就保存，系统不会替你生成。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
+    items 的写法:可传字符串列表，或对象 items=[{"title":"最终标题","content":"最终正文","tags":["中文短标签"],"importance":5,"domain":["恋爱"],"valence":0.8,"arousal":0.4,"why_remembered":"我为什么要留下这条","meaning":"这件事像什么、当时是什么处境(可选)","source_ranges":[[1,20]]}]。正文逐字入库，写入不经过别的模型：你带的字段原样生效；没带的用中性值(标题留空、无标签、importance 5、valence 0.5、arousal 0.3)，主题域不带就是“未分类”。正文与已有的桶逐字相同时不重复写入。why_remembered 你带了就保存，系统不会替你生成。meaning 可选、一条只收一句(字符串，不超过 2000 字，超了整批不写)：写这件事像什么、当时是什么处境，不是再写一遍发生了什么，大多数条目不需要；带了就和 hold 的 meaning 一样存下，能被关键词搜到。同时传 content 时，content 是整批共享的隐藏原文证据，只保存一次；source_ranges 使用 1-based 闭区间把每个桶连回自己的原文片段。"""
     return await _with_notice(
         _t_grow.dispatch(content, items=items, test_data=test_data),
         op="grow",

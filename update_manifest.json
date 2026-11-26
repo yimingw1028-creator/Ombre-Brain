@@ -747,8 +747,8 @@
     },
     {
       "path": "src/server.py",
-      "sha256": "53b9a164564a94b0c7a1a042a3fb7d4ef6d37c8a1aeffe0ed81918cfe636cf11",
-      "size": 63598
+      "sha256": "1feac44a3777a85920df973071f7013fd0f9b63526fe6a493878be124719b9a0",
+      "size": 63932
     },
     {
       "path": "src/server_app.py",
@@ -762,8 +762,8 @@
     },
     {
       "path": "src/tools/_common.py",
-      "sha256": "260913f169fdadce6174632023a3df5bae219425a591fca4b445775ac0690063",
-      "size": 68706
+      "sha256": "0291231d225876f529451bb16f86290274af1b1ddec62c61e826029263409d67",
+      "size": 69735
     },
     {
       "path": "src/tools/_runtime.py",
@@ -842,8 +842,8 @@
     },
     {
       "path": "src/tools/grow/core.py",
-      "sha256": "d96d8df12a5a065d24549643bca5ae70036935b0561ddabd2dacd374cc5cf320",
-      "size": 16027
+      "sha256": "6e148eac8f545c69187836ffc48b6345bdea432b1d3d41c8a9dbf96797f8a95b",
+      "size": 16270
     },
     {
       "path": "src/tools/grow/shortpath.py",

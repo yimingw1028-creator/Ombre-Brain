@@ -67,9 +67,12 @@ _DEFAULT_MAX_QUERY_BYTES = 16 * 1024
 _DEFAULT_MAX_METADATA_BYTES = 16 * 1024
 _DEFAULT_MAX_GROW_ITEMS = 100
 _WHY_REMEMBERED_MAX_CHARS = 500
+# 二改第 9b 刀：grow(items) 每条可以带一句 meaning。上限和 bucket_manager 的
+# _MEANING_ITEM_MAX 一样；那边超长会悄悄截断，grow 这里改成先拒绝，不改写入方的话。
+_GROW_MEANING_MAX_CHARS = 2000
 _GROW_ITEM_FIELDS = frozenset({
     "content", "title", "name", "tags", "importance", "domain",
-    "valence", "arousal", "source_ranges", "why_remembered",
+    "valence", "arousal", "source_ranges", "why_remembered", "meaning",
 })
 
 # --- importance 审计范围排除的类型（is_importance_audit_candidate 复用）---
@@ -408,6 +411,19 @@ def check_grow_items_payload(items: list) -> str | None:
                         f"grow items 第 {index} 项 why_remembered "
                         f"不能超过 {_WHY_REMEMBERED_MAX_CHARS} 个字符。"
                     )
+            # 二改第 9b 刀：meaning 一条只收一句（字符串），超长整批拒绝，不截断。
+            raw_meaning = item.get("meaning")
+            if raw_meaning is not None:
+                if not isinstance(raw_meaning, str):
+                    return (
+                        f"grow items 第 {index} 项 meaning 必须是字符串"
+                        "（一条只收一句，要补第二句用 trace 的 meaning_append）。"
+                    )
+                if len(raw_meaning.strip()) > _GROW_MEANING_MAX_CHARS:
+                    return (
+                        f"grow items 第 {index} 项 meaning "
+                        f"不能超过 {_GROW_MEANING_MAX_CHARS} 个字符，未创建任何桶。"
+                    )
             for field in ("tags", "domain"):
                 raw_list = item.get(field)
                 if raw_list is not None and not (
@@ -444,7 +460,7 @@ def check_grow_items_payload(items: list) -> str | None:
                 if field == "content" or item.get(field) is None:
                     continue
                 metadata_value = item[field]
-                if field == "why_remembered":
+                if field in ("why_remembered", "meaning"):
                     metadata_value = metadata_value.strip()
                 metadata_values.append(metadata_value)
         else:

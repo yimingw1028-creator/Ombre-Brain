@@ -172,6 +172,8 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
             item["content"] = s
             if isinstance(item.get("why_remembered"), str):
                 item["why_remembered"] = item["why_remembered"].strip()
+            if isinstance(item.get("meaning"), str):   # 二改第 9b 刀
+                item["meaning"] = item["meaning"].strip()
         else:
             s = ""
         if s:
@@ -283,6 +285,7 @@ async def grow_items(items: list, source_content: str = "", test_data: bool = Fa
                 title=final_title,
                 why_remembered=why_remembered,
                 merge_why_remembered=why_remembered,
+                meaning=item.get("meaning") or "",   # 二改第 9b 刀：一句处境，原样交给写入
                 source_refs=source_refs,
                 source_tool="grow",
                 grow_batch_id=batch_id,
