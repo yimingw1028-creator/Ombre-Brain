@@ -5,8 +5,14 @@
 碰到第一条放不下的就全部停下。
 
 现在：放不下全文的桶退成一行「标题 | 创建日期 | 全文 N 字 | 桶ID」，不给半截正文；
-后面放得下的照样给全文；这些行算进预算，一行也放不下时照实说还有几条。
+这些行算进预算，一行也放不下时照实说还有几条。
 连带关闭去掉。每条头部末尾带创建日期（YYYY-MM-DD）。
+
+8c 小修（11-27 验收后）：原来先尽量给全文，剩下的零头再列行，预算一紧那几行常常
+一条都挤不进去。现在每给一条全文之前，先看给了它以后还够不够给最多 10 条各列一行；
+不够就退成一行。一段最多 10 行。检索：从这一条起全部退成一行（一放不下就停，后面
+的相关度更低）。浮现：只这一条退成一行，后面放得下的照样给全文（浮现的顺序是加权
+随机洗过的，排在后面的不一定不重要）。
 
 开关：config.yaml 里 surfacing.overflow_lines: false → 三件事一起回到旧行为。
 """
@@ -17,6 +23,7 @@ from .. import _runtime as rt
 from ._verbatim import stored_bucket_content
 
 LINE_TITLE_CHARS = 20   # June 11-27 定：没标题时取正文开头 20 字，和第 9 刀那一行对齐
+LINES_MAX = 10          # 8c 小修：一段最多列 10 行，沿用 June 11-27 给第 9 刀定的上限
 
 
 def overflow_lines_enabled() -> bool:
@@ -69,14 +76,26 @@ def overflow_line(bucket: dict) -> str:
     return f"{line_title(bucket)} | {date} | 全文 {len(body)} 字 | {bucket.get('id', '')}"
 
 
-def fit_lines(buckets: list, budget_left: int, header: str) -> tuple[list[str], int, int]:
+def lines_cost(buckets: list, header: str, line_fn=overflow_line) -> int:
+    """8c 小修：把这些桶各列成一行（连同 header）要多少 token；没有桶就是 0。"""
+    if not buckets:
+        return 0
+    return count_tokens_approx(header) + sum(
+        count_tokens_approx(line_fn(bucket)) for bucket in buckets
+    )
+
+
+def fit_lines(
+    buckets: list, budget_left: int, header: str, limit: int | None = None
+) -> tuple[list[str], int, int]:
     """把放不下的桶逐条退成一行，连同 header 一起算进剩下的预算。
 
+    limit：最多列几行（8c 小修起两处都传 LINES_MAX）；超出的算进没列出来的条数。
     返回 (行, 用掉的 token, 没列出来的条数)。一行也放不下时不用预算、不出 header。
     """
     lines: list[str] = []
     used = count_tokens_approx(header)
-    for bucket in buckets:
+    for bucket in (buckets if limit is None else buckets[:limit]):
         line = overflow_line(bucket)
         cost = count_tokens_approx(line)
         if used + cost > budget_left:

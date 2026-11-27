@@ -205,6 +205,7 @@ async def test_token_budget_omits_whole_bucket_instead_of_truncating(monkeypatch
     }
     manager = OrderedBucketManager([first, second])
     dehydrator = _install_runtime(manager)
+    rt.config["surfacing"]["overflow_lines"] = False  # 二改第 8c 刀：回到放不下整条跳过、不留行位
     monkeypatch.setattr("tools.breath.search.random.random", lambda: 1.0)
     _, first_cost = render_stored_bucket(
         first, "[bucket_id:first]", "👣 Footprint：暂时无法读取"
@@ -301,6 +302,7 @@ async def test_default_surface_skips_random_oversized_candidate_and_keeps_later_
     }
     manager = OrderedBucketManager([top, high, blocker])
     _install_runtime(manager)
+    rt.config["surfacing"]["overflow_lines"] = False  # 二改第 8c 刀：回到放不下整条跳过、不留行位
 
     def blocker_first(items):
         items.sort(key=lambda bucket: bucket["id"] != "blocker")

@@ -32,12 +32,19 @@ import asyncio
 import hashlib
 import inspect
 import random
+from itertools import chain, islice
 from datetime import datetime, time
 
 from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
-from ._overflow import dated, fit_lines, overflow_lines_enabled
+from ._overflow import (
+    LINES_MAX,
+    dated,
+    fit_lines,
+    lines_cost,
+    overflow_lines_enabled,
+)
 from ._verbatim import render_stored_bucket
 from utils import count_tokens_approx, parse_bool, parse_iso_datetime
 
@@ -332,6 +339,16 @@ def _partial_line(bucket: dict) -> str:
     return f"{title} | 字面 {hit}/{total} | {created} | {bucket.get('id', '')}"
 
 
+def _lines_reserve(tail) -> int:
+    """二改第 8c 刀小修：给后面最多 10 条各留一行的位置（连同每一段的标题）。"""
+    head = list(islice(tail, LINES_MAX))
+    return lines_cost(
+        [b for b in head if not b.get("partial_only")], _OVERFLOW_BLOCK_HEADER
+    ) + lines_cost(
+        [b for b in head if b.get("partial_only")], _PARTIAL_BLOCK_HEADER, _partial_line
+    )
+
+
 async def surface_search(
     query: str,
     max_results: int,
@@ -510,6 +527,7 @@ async def surface_search(
     touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
     overflow_full: list = []     # 二改第 8c 刀：放不下全文的命中
     budget_partial: list = []    # 二改第 8c 刀：放不下全文的部分命中
+    lines_shown = 0              # 二改第 8c 刀小修：两段一共列出了几行
     for idx, bucket in enumerate(matches):
         meta = bucket["metadata"]
         bucket_id = bucket["id"]
@@ -545,15 +563,18 @@ async def surface_search(
         if lit_tag:
             rendered = lit_tag + rendered
             entry_tokens = count_tokens_approx(rendered)
-        if token_used + entry_tokens > max_tokens:
+        if overflow_on:
+            # 二改第 8c 刀小修：给了这条全文以后，还要够后面最多 10 条各列一行；
+            # 不够就从这一条起全部退成一行（一放不下就停，不再往后找塞得下的）。
+            reserve = _lines_reserve(chain(matches[idx + 1:], overflow_partial))
+            if token_used + entry_tokens + reserve > max_tokens:
+                budget_blocked = True
+                rest = matches[idx:]
+                overflow_full = [b for b in rest if not b.get("partial_only")]
+                budget_partial = [b for b in rest if b.get("partial_only")]
+                break
+        elif token_used + entry_tokens > max_tokens:
             budget_blocked = True
-            if overflow_on:
-                # 二改第 8c 刀：放不下的这条退成一行，后面放得下的照样给全文。
-                if bucket.get("partial_only"):
-                    budget_partial.append(bucket)
-                else:
-                    overflow_full.append(bucket)
-                continue
             # 二改第 9 刀：token 放不下的部分命中，也退成一行。
             overflow_partial = [
                 b for b in matches[idx:] if b.get("partial_only")
@@ -571,13 +592,15 @@ async def surface_search(
     if touched_ids:
         asyncio.create_task(rt.bucket_mgr.touch_many(touched_ids, ripple=False))
 
-    # 二改第 8c 刀：放不下全文的命中每条退成一行，算进 token 预算；
-    # 一行也放不下的照实说还有几条。部分命中排在它们后面（第 9 刀那一段）。
+    # 二改第 8c 刀：放不下全文的命中每条退成一行，最多 10 行，算进 token 预算；
+    # 没列出来的照实说还有几条。部分命中排在它们后面（第 9 刀那一段）。
     if overflow_full:
         lines, used, left = fit_lines(
-            overflow_full, max_tokens - token_used, _OVERFLOW_BLOCK_HEADER
+            overflow_full, max_tokens - token_used, _OVERFLOW_BLOCK_HEADER,
+            limit=LINES_MAX,
         )
         token_used += used
+        lines_shown += len(lines)
         if lines:
             block = [_OVERFLOW_BLOCK_HEADER] + lines
             if left:
@@ -601,6 +624,7 @@ async def surface_search(
             lines.append(line)
             used += line_tokens
         hidden = len(overflow_partial) - len(lines)
+        lines_shown += len(lines)
         if lines:
             token_used = used
             block = [_PARTIAL_BLOCK_HEADER] + lines
@@ -668,7 +692,8 @@ async def surface_search(
     notices = []
     if semantic_notice:
         notices.append(semantic_notice)
-    if budget_blocked:
+    # 二改第 8c 刀小修：那几行列出来了，就不再在最上面重复一句「请提高 max_tokens」。
+    if budget_blocked and not (overflow_on and lines_shown):
         notices.append(_BUDGET_NOTICE)
     if notices:
         final_text = "\n".join(notices + [final_text])

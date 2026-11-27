@@ -36,7 +36,7 @@ from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
 from utils import parse_bool, parse_iso_datetime, strip_wikilinks
-from ._overflow import dated, fit_lines, overflow_lines_enabled
+from ._overflow import LINES_MAX, dated, fit_lines, lines_cost, overflow_lines_enabled
 from ._verbatim import render_stored_bucket
 
 # U-07 fix: throttle the sampling-fallback INFO log to once per 5 minutes.
@@ -308,7 +308,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
 
     dynamic_results = []
     dynamic_overflow = []   # 二改第 8c 刀：放不下全文的，退成一行
-    for b in candidates:
+    for pos, b in enumerate(candidates):
         try:
             score = rt.decay_engine.calculate_score(b["metadata"])
             rendered, entry_tokens = render_stored_bucket(
@@ -316,10 +316,16 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                 dated(f"[权重:{score:.2f}] [bucket_id:{b['id']}]", b, overflow_on),
                 _footprint(b),
             )
-            if entry_tokens > token_budget:
-                if overflow_on:
+            if overflow_on:
+                # 二改第 8c 刀小修：给了这条全文以后，还要够给「已经退成一行的 + 后面的」
+                # 里最多 10 条各列一行；不够，这条就退成一行。不像检索那样一放不下就停：
+                # 浮现的顺序是加权随机洗过的，排在后面的不一定不重要（June 11-27 选的）。
+                tail = (dynamic_overflow + candidates[pos + 1:])[:LINES_MAX]
+                reserve = lines_cost(tail, _OVERFLOW_LINES_HEADER)
+                if entry_tokens + reserve > token_budget:
                     dynamic_overflow.append(b)
                     continue
+            elif entry_tokens > token_budget:
                 primary_omitted += 1
                 continue
             dynamic_results.append(rendered)
@@ -332,7 +338,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     dynamic_lines: list[str] = []
     if dynamic_overflow:
         dynamic_lines, used, left = fit_lines(
-            dynamic_overflow, token_budget, _OVERFLOW_LINES_HEADER
+            dynamic_overflow, token_budget, _OVERFLOW_LINES_HEADER, limit=LINES_MAX
         )
         token_budget -= used
         primary_omitted += left

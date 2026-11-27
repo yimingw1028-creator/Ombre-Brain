@@ -394,6 +394,7 @@ async def test_lines_stop_when_budget_runs_out(monkeypatch):
     ]
     manager = RecordingManager([full] + partials)
     _install(monkeypatch, manager)
+    rt.config["surfacing"]["overflow_lines"] = False
 
     # 先用宽松的预算跑一次，拿到全中那条实际渲染出来的样子
     probe = await dispatch(query="舞蹈 爵士", max_results=1, max_tokens=20000)

@@ -8,8 +8,13 @@
 
 现在：
 - 放不下全文的桶退成一行「标题 | 创建日期 | 全文 N 字 | 桶ID」，不给半截正文；
-  没标题取正文开头 20 字。后面放得下的照样给全文。
-- 这些行算进预算；一行也放不下的，照实说还有几条。
+  没标题取正文开头 20 字。
+- 8c 小修（11-27 验收后）：每给一条全文之前，先看给了它以后还够不够给最多 10 条
+  各列一行；不够就退成一行。检索里从这一条起全部退成一行（一放不下就停）；浮现里
+  只这一条退成一行，后面放得下的照样给全文（浮现的顺序是加权随机洗过的）。
+  一段最多 10 行。原来先尽量给全文、剩下的零头再列行，预算一紧那几行一条都挤不进去。
+- 这些行算进预算；没列出来的照实说还有几条。那几行列出来了，检索最上面就不再挂
+  「请提高 max_tokens」那句。
 - 连带关闭去掉。
 - 每条头部末尾带创建日期 YYYY-MM-DD。
 - 开关 surfacing.overflow_lines，默认开；false 三件事一起回到旧行为。
@@ -140,7 +145,7 @@ async def test_surface_header_has_created_date(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_surface_overflow_becomes_line_and_next_still_full(monkeypatch):
+async def test_surface_overflow_becomes_line_and_later_fit_still_full(monkeypatch):
     big = _memory("big", _LONG, name="很长的一条", importance=10)
     small = _memory("small", "一件短短的事。", importance=9)
     _install(monkeypatch, [big, small])
@@ -149,8 +154,9 @@ async def test_surface_overflow_becomes_line_and_next_still_full(monkeypatch):
     assert _LONG not in output
     assert f"很长的一条 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
     assert "（预算放不下全文，只列一行，按桶 ID 搜可看全文：）" in output
-    # 排在后面、放得下的照样给全文
+    # 浮现不像检索那样一放不下就停：排在后面、放得下的照样给全文
     assert "一件短短的事。" in output
+    assert "| small" not in output
     # 退成一行不算省略
     assert "token 预算不足" not in output
 
@@ -224,20 +230,26 @@ async def test_search_header_has_created_date(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_search_overflow_becomes_line_and_next_still_full(monkeypatch):
+async def test_search_stops_at_first_overflow_rest_become_lines(monkeypatch):
     manager = _install(monkeypatch, [
+        _hit("first", "跳舞的第一天。"),
         _hit("big", _LONG, name="很长的一条"),
         _hit("small", "跳舞的一天。"),
     ])
     output = await dispatch(query="跳舞", max_results=5, max_tokens=300)
+    assert "跳舞的第一天。" in output
     assert _LONG not in output
     assert "=== 放不下全文，只列一行（按桶 ID 搜可看全文） ===" in output
     assert f"很长的一条 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
-    assert "跳舞的一天。" in output
+    # 8c 小修：一放不下就停，排在后面的短桶也只给一行
+    assert "跳舞的一天。" not in output
+    assert "small | 2026-11-20 | 全文 6 字 | small" in output
+    # 那几行列出来了，最上面不再挂「请提高 max_tokens」
+    assert "请提高 max_tokens" not in output
     # 退成一行的不算想起
     import asyncio
     await asyncio.sleep(0)
-    assert manager.touched == ["small"]
+    assert manager.touched == ["first"]
 
 
 @pytest.mark.asyncio
@@ -249,6 +261,8 @@ async def test_search_lines_that_do_not_fit_are_counted(monkeypatch):
     output = await dispatch(query="跳舞", max_results=5, max_tokens=5)
     assert "第一条很长的记忆标题" not in output
     assert "[还有 2 条命中放不下全文，也放不下一行：token 预算不够]" in output
+    # 一行都没列出来时，最上面那句还留着
+    assert "请提高 max_tokens" in output
 
 
 @pytest.mark.asyncio
@@ -265,7 +279,8 @@ async def test_search_overflow_lines_come_before_partial_lines(monkeypatch):
     _install(monkeypatch, [full, part, extra])
     output = await dispatch(query="舞蹈 爵士", max_results=2, max_tokens=400)
     assert "全中但很长 | 2026-11-20 | 全文" in output
-    assert "[字面 1/2] [bucket_id:part] 2026-11-20" in output
+    # 8c 小修：一放不下就停，后面的部分命中也只给一行（归第 9 刀那一段）
+    assert "部分命中 | 字面 1/2 | 2026-11-20 | part" in output
     assert "又一条部分命中 | 字面 1/2 | 2026-11-20 | extra" in output
     assert output.index("全中但很长 |") < output.index("又一条部分命中 |")
 
@@ -306,3 +321,57 @@ async def test_exact_id_header_has_created_date(monkeypatch):
     output = await dispatch(query="4f3a2b1c0d9e", max_tokens=20000)
     assert "[exact_bucket_id:true] [bucket_id:4f3a2b1c0d9e] 2026-11-20\n" in output
     assert "按编号读的一条。" in output
+
+
+# ---------------------------------------------------------------------------
+# 8c 小修：给那几行留位置
+# ---------------------------------------------------------------------------
+
+_MEDIUM = "香水的味道记了一整段。" * 15     # 一条约两百 token，预算 600 放得下两三条
+
+
+@pytest.mark.asyncio
+async def test_search_reserves_room_for_lines(monkeypatch):
+    """11-27 陆沉验收：预算 600 搜「香水」，前几条全文把预算吃光，后面 14 条一行都没有。"""
+    hits = [_hit(f"h{i:02d}", _MEDIUM, name=f"香水第{i}条") for i in range(18)]
+    _install(monkeypatch, hits)
+    output = await dispatch(query="香水", max_results=18, max_tokens=600)
+
+    full = [i for i in range(18) if f"[bucket_id:h{i:02d}]" in output]
+    assert full == list(range(len(full)))           # 全文是排在最前面的那几条
+    assert "也放不下一行" not in output
+    assert "=== 放不下全文，只列一行（按桶 ID 搜可看全文） ===" in output
+    listed = [i for i in range(18) if f"| h{i:02d}" in output]
+    assert listed == list(range(len(full), len(full) + 10))   # 紧接着的 10 条各一行
+    assert f"还有 {18 - len(full) - 10} 条没显示" in output
+    assert "请提高 max_tokens" not in output
+
+
+@pytest.mark.asyncio
+async def test_search_overflow_block_caps_at_ten_lines(monkeypatch):
+    hits = [_hit(f"h{i:02d}", _LONG, name=f"第{i}条") for i in range(20)]
+    _install(monkeypatch, hits)
+    output = await dispatch(query="跳舞", max_results=20, max_tokens=20000)
+    listed = [i for i in range(20) if f"| h{i:02d}" in output]
+    full = [i for i in range(20) if f"[bucket_id:h{i:02d}]" in output]
+    assert 20 - len(full) > 10          # 真的有超过 10 条放不下
+    assert len(listed) == 10
+    assert f"还有 {20 - len(full) - 10} 条没显示" in output
+
+
+@pytest.mark.asyncio
+async def test_surface_reserves_room_for_lines(monkeypatch):
+    buckets = [
+        _memory(f"m{i:02d}", _MEDIUM, name=f"浮现第{i}条", importance=9)
+        for i in range(18)
+    ]
+    _install(monkeypatch, buckets)
+    output = await dispatch(max_tokens=600, max_results=18)
+
+    full = [i for i in range(18) if f"[bucket_id:m{i:02d}]" in output]
+    listed = [i for i in range(18) if f"| m{i:02d}" in output]
+    assert full == list(range(len(full)))
+    assert listed == list(range(len(full), len(full) + 10))
+    # 第 11 条起没列出来的，照实算进「有 N 条没返回」
+    assert f"有 {18 - len(full) - 10} 条主要浮现记忆因放不下剩余预算而未返回" in output
+
