@@ -14,8 +14,14 @@
 的相关度更低）。浮现：只这一条退成一行，后面放得下的照样给全文（浮现的顺序是加权
 随机洗过的，排在后面的不一定不重要）。
 
+8c 小修二（11-27）：上游新建桶时把创建时间写进名字（「2026-11-08 03-51-12 标题」，
+bucket_manager.create()），那一行又单列了日期，重复了。拼那一行时把名字开头那串
+「年-月-日 时-分-秒」略去不显示；去掉后什么都不剩就用正文开头 20 字。库里的名字不动。
+
 开关：config.yaml 里 surfacing.overflow_lines: false → 三件事一起回到旧行为。
 """
+
+import re
 
 from utils import count_tokens_approx, parse_iso_datetime, strip_wikilinks
 
@@ -24,6 +30,8 @@ from ._verbatim import stored_bucket_content
 
 LINE_TITLE_CHARS = 20   # June 11-27 定：没标题时取正文开头 20 字，和第 9 刀那一行对齐
 LINES_MAX = 10          # 8c 小修：一段最多列 10 行，沿用 June 11-27 给第 9 刀定的上限
+# 8c 小修二：上游 create() 给名字加的时间前缀，只认正好是「年-月-日 时-分-秒」的那一串
+_NAME_TS_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}(?=\s|$)\s*")
 
 
 def overflow_lines_enabled() -> bool:
@@ -57,9 +65,17 @@ def dated(header: str, bucket: dict, enabled: bool) -> str:
     return f"{header} {date}" if date else header
 
 
+def display_name(meta: dict, strip_timestamp: bool = True) -> str:
+    """名字折掉多余空白；strip_timestamp 时去掉开头上游自动加的时间（8c 小修二）。"""
+    name = " ".join(str((meta or {}).get("name") or "").split())
+    if strip_timestamp:
+        name = _NAME_TS_PREFIX.sub("", name, count=1)
+    return name
+
+
 def line_title(bucket: dict) -> str:
     meta = bucket.get("metadata") or {}
-    title = " ".join(str(meta.get("name") or "").split())
+    title = display_name(meta)
     if title:
         return title
     body = " ".join(str(bucket.get("content") or "").split())

@@ -375,3 +375,59 @@ async def test_surface_reserves_room_for_lines(monkeypatch):
     # 第 11 条起没列出来的，照实算进「有 N 条没返回」
     assert f"有 {18 - len(full) - 10} 条主要浮现记忆因放不下剩余预算而未返回" in output
 
+
+# ---------------------------------------------------------------------------
+# 8c 小修二：那一行不显示名字开头上游自动加的时间
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_surface_line_strips_upstream_timestamp_from_name(monkeypatch):
+    big = _memory("big", _LONG, name="2026-11-08 03-51-12 11月8日周日早上去跑步", importance=10)
+    _install(monkeypatch, [big])
+    output = await dispatch(max_tokens=300)
+    assert f"11月8日周日早上去跑步 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
+    assert "03-51-12" not in output
+
+
+@pytest.mark.asyncio
+async def test_line_with_timestamp_only_name_falls_back_to_content(monkeypatch):
+    body = "11月8日周日早上醒来先去操场跑了三圈，回来洗澡吃早饭。" + "很长" * 800
+    _install(monkeypatch, [_memory("old", body, name="2026-11-08 03-51-12")])
+    output = await dispatch(max_tokens=200)
+    assert "11月8日周日早上醒来先去操场跑了三圈， | 2026-11-20 | 全文" in output
+    assert "03-51-12" not in output
+
+
+@pytest.mark.asyncio
+async def test_line_keeps_titles_that_only_start_with_a_date(monkeypatch):
+    big = _memory("big", _LONG, name="2026-11-08 那天", importance=10)
+    _install(monkeypatch, [big])
+    output = await dispatch(max_tokens=300)
+    assert "2026-11-08 那天 | 2026-11-20 | 全文" in output
+
+
+@pytest.mark.asyncio
+async def test_search_lines_strip_timestamp_both_kinds(monkeypatch):
+    full = _hit("full", _LONG, name="2026-11-08 03-51-12 香水柜", literal_terms=(2, 2), partial_only=False)
+    part = _memory(
+        "part", "只写了香水。", name="2026-11-09 22-10-05 睡前挑香水",
+        literal_hit=False, semantic_score=None, literal_terms=(1, 2), partial_only=True,
+    )
+    _install(monkeypatch, [full, part])
+    output = await dispatch(query="香水 柜子", max_results=5, max_tokens=300)
+    assert "香水柜 | 2026-11-20 | 全文" in output
+    assert "睡前挑香水 | 字面 1/2 | 2026-11-20 | part" in output
+    assert "03-51-12" not in output and "22-10-05" not in output
+
+
+@pytest.mark.asyncio
+async def test_switch_off_keeps_timestamp_in_cut9_line(monkeypatch):
+    full = _hit("full", "两个词都中。", literal_terms=(2, 2), partial_only=False)
+    part = _memory(
+        "part", _LONG, name="2026-11-09 22-10-05 睡前挑香水",
+        literal_hit=False, semantic_score=None, literal_terms=(1, 2), partial_only=True,
+    )
+    _install(monkeypatch, [full, part], {"overflow_lines": False})
+    output = await dispatch(query="香水 柜子", max_results=5, max_tokens=300)
+    assert "2026-11-09 22-10-05 睡前挑香水 | 字面 1/2 | 2026-11-20 | part" in output
+

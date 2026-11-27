@@ -41,6 +41,7 @@ from ..plan.core import is_letter_bucket
 from ._overflow import (
     LINES_MAX,
     dated,
+    display_name,
     fit_lines,
     lines_cost,
     overflow_lines_enabled,
@@ -323,7 +324,8 @@ def _literal_terms_tag(bucket: dict) -> str:
 def _partial_line(bucket: dict) -> str:
     """放不下的部分命中退成一行：标题 | 字面 k/n | 创建日期 | 桶ID。"""
     meta = bucket.get("metadata", {}) or {}
-    title = " ".join(str(meta.get("name") or "").split())
+    # 二改第 8c 刀小修二：开关开着时，名字开头上游自动加的时间不显示
+    title = display_name(meta, overflow_lines_enabled())
     if not title:
         body = " ".join(str(bucket.get("content") or "").split())
         title = body[:_PARTIAL_TITLE_CHARS] or "（无标题）"
