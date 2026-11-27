@@ -1,0 +1,746 @@
+diff --git a/src/server.py b/src/server.py
+index 3f33510..9236792 100644
+--- a/src/server.py
++++ b/src/server.py
+@@ -690,7 +690,7 @@ async def breath_search(
+     date_from: Optional[str] = "",
+     date_to: Optional[str] = "",
+ ) -> str:
+-    """按关键词/语义检索记忆桶,融合关键词/BM25+语义检索,向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写。query 里用空格隔开几个词时，每个词各自去找：每个词都中的照常排前面；只中一部分的排在最后、头部标「字面 k/n」、不算想起（不刷新活跃时间），放不下的每条只给一行（标题 | 字面 k/n | 创建日期 | 桶ID），想看全文就用桶 ID 再搜一次。domain 逗号分隔,按主题域预筛。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601，同日上下界包含当天全日。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。需要 tags/importance_min/valence/arousal/max_tokens/catalog 等更多过滤维度用 breath_advanced(...)。"""
++    """按关键词/语义检索记忆桶,融合关键词/BM25+语义检索,向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写。query 里用空格隔开几个词时，每个词各自去找：每个词都中的照常排前面；只中一部分的排在最后、头部标「字面 k/n」、不算想起（不刷新活跃时间），放不下的每条只给一行（标题 | 字面 k/n | 创建日期 | 桶ID），想看全文就用桶 ID 再搜一次。query 传完整的桶 ID 时，直接返回那一条的全文（feel、plan、信件除外），算作想起。放不下剩余 token 的命中退成一行（标题 | 创建日期 | 全文 N 字 | 桶ID），不给半截正文；每条头部末尾带创建日期。domain 逗号分隔,按主题域预筛。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601，同日上下界包含当天全日。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。需要 tags/importance_min/valence/arousal/max_tokens/catalog 等更多过滤维度用 breath_advanced(...)。"""
+     return await _with_notice(
+         _t_breath.dispatch(
+             query=query, domain=domain, max_results=max_results,
+@@ -718,7 +718,7 @@ async def breath_advanced(
+     date_from: Optional[str] = "",
+     date_to: Optional[str] = "",
+ ) -> str:
+-    """breath 的完整参数版,给需要精细控制的场景用(日常用 breath()/breath_search() 就够了)。不传 query=返回权重最高的未解决记忆;传 query=融合关键词/BM25+语义检索，向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写；max_tokens 不足时整桶省略，绝不截断正文。catalog=True=目录模式:只返回每桶一行元数据(名称|域|重要度,0 LLM 调用,最省 token),适合开新对话先看目录再 breath_search(query=...) 精准拉取,并遵守 domain、tags 与 max_results。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 20000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
++    """breath 的完整参数版,给需要精细控制的场景用(日常用 breath()/breath_search() 就够了)。不传 query=返回权重最高的未解决记忆;传 query=融合关键词/BM25+语义检索，向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写；max_tokens 不足时绝不截断正文：不传 query 的浮现和传 query 的检索里，放不下的桶退成一行（标题 | 创建日期 | 全文 N 字 | 桶ID）；其余模式整桶省略。catalog=True=目录模式:只返回每桶一行元数据(名称|域|重要度,0 LLM 调用,最省 token),适合开新对话先看目录再 breath_search(query=...) 精准拉取,并遵守 domain、tags 与 max_results。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601。max_tokens=单次返回总 token 上限(默认 config.surfacing.breath_max_tokens,fallback 20000)。domain 逗号分隔,valence/arousal 0~1(-1 忽略)。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。importance_min>=1=跳过语义检索,按重要度降序返回最多 20 条高重要度记忆。tags 逗号分隔,AND 过滤;tags=\"feel\" 或 \"__feel__\" 等价于 domain=\"feel\",返回所有 feel 类记忆。"""
+     return await _with_notice(
+         _t_breath.dispatch(
+             query=query, max_tokens=max_tokens, domain=domain,
+diff --git a/src/tools/breath/_overflow.py b/src/tools/breath/_overflow.py
+new file mode 100644
+index 0000000..d241b62
+--- /dev/null
++++ b/src/tools/breath/_overflow.py
+@@ -0,0 +1,88 @@
++"""二改第 8c 刀：breath 放不下全文的桶退成一行，头部带创建日期。
++
++原来：无 query 的浮现里，放不下剩余预算的桶整条跳过，只说「有 N 条没返回」，
++并且只要跳过过一条，「久未浮现」「偶然想起」两段整段不跑；有 query 的检索
++碰到第一条放不下的就全部停下。
++
++现在：放不下全文的桶退成一行「标题 | 创建日期 | 全文 N 字 | 桶ID」，不给半截正文；
++后面放得下的照样给全文；这些行算进预算，一行也放不下时照实说还有几条。
++连带关闭去掉。每条头部末尾带创建日期（YYYY-MM-DD）。
++
++开关：config.yaml 里 surfacing.overflow_lines: false → 三件事一起回到旧行为。
++"""
++
++from utils import count_tokens_approx, parse_iso_datetime, strip_wikilinks
++
++from .. import _runtime as rt
++from ._verbatim import stored_bucket_content
++
++LINE_TITLE_CHARS = 20   # June 11-27 定：没标题时取正文开头 20 字，和第 9 刀那一行对齐
++
++
++def overflow_lines_enabled() -> bool:
++    """读不到、写错了都按默认（开）；只有明确写 false/0/no/off 才回到旧行为。"""
++    cfg = getattr(rt, "config", None)
++    surfacing = cfg.get("surfacing") if isinstance(cfg, dict) else None
++    if not isinstance(surfacing, dict):
++        return True
++    value = surfacing.get("overflow_lines", True)
++    if isinstance(value, bool):
++        return value
++    if isinstance(value, str):
++        return value.strip().lower() not in ("0", "false", "no", "off")
++    return True
++
++
++def created_date(bucket: dict) -> str:
++    """桶的创建日期 YYYY-MM-DD；没有就是空串。"""
++    raw = str((bucket.get("metadata") or {}).get("created") or "").strip()
++    if not raw:
++        return ""
++    try:
++        return parse_iso_datetime(raw).date().isoformat()
++    except (TypeError, ValueError, AttributeError):
++        return raw[:10]
++
++
++def dated(header: str, bucket: dict, enabled: bool) -> str:
++    """头部末尾加创建日期；开关关着或没有日期时原样返回。"""
++    date = created_date(bucket) if enabled else ""
++    return f"{header} {date}" if date else header
++
++
++def line_title(bucket: dict) -> str:
++    meta = bucket.get("metadata") or {}
++    title = " ".join(str(meta.get("name") or "").split())
++    if title:
++        return title
++    body = " ".join(str(bucket.get("content") or "").split())
++    return body[:LINE_TITLE_CHARS] or "（无标题）"
++
++
++def overflow_line(bucket: dict) -> str:
++    """标题 | 创建日期 | 全文 N 字 | 桶ID。N 是会显示出来的正文字数。"""
++    try:
++        body = strip_wikilinks(stored_bucket_content(bucket))
++    except TypeError:
++        body = str(bucket.get("content") or "")
++    date = created_date(bucket) or "日期未知"
++    return f"{line_title(bucket)} | {date} | 全文 {len(body)} 字 | {bucket.get('id', '')}"
++
++
++def fit_lines(buckets: list, budget_left: int, header: str) -> tuple[list[str], int, int]:
++    """把放不下的桶逐条退成一行，连同 header 一起算进剩下的预算。
++
++    返回 (行, 用掉的 token, 没列出来的条数)。一行也放不下时不用预算、不出 header。
++    """
++    lines: list[str] = []
++    used = count_tokens_approx(header)
++    for bucket in buckets:
++        line = overflow_line(bucket)
++        cost = count_tokens_approx(line)
++        if used + cost > budget_left:
++            break
++        lines.append(line)
++        used += cost
++    if not lines:
++        return [], 0, len(buckets)
++    return lines, used, len(buckets) - len(lines)
+diff --git a/src/tools/breath/search.py b/src/tools/breath/search.py
+index 5bd9664..c675bbb 100644
+--- a/src/tools/breath/search.py
++++ b/src/tools/breath/search.py
+@@ -37,6 +37,7 @@ from datetime import datetime, time
+ from ombrebrain.policy.surfacing import SurfacePolicyVM
+ from .. import _runtime as rt
+ from ..plan.core import is_letter_bucket
++from ._overflow import dated, fit_lines, overflow_lines_enabled
+ from ._verbatim import render_stored_bucket
+ from utils import count_tokens_approx, parse_bool, parse_iso_datetime
+ 
+@@ -68,7 +69,9 @@ def _is_archived(bucket: dict) -> bool:
+     )
+ 
+ 
+-def _render_archived_hit(bucket: dict, footprint: str) -> tuple[str, int]:
++def _render_archived_hit(
++    bucket: dict, footprint: str, date_on: bool = False
++) -> tuple[str, int]:
+     bucket_id = str(bucket.get("id") or "")
+     protected_mark = (
+         "🛡️ [受保护记忆] "
+@@ -82,6 +85,7 @@ def _render_archived_hit(bucket: dict, footprint: str) -> tuple[str, int]:
+         f"{protected_mark}[query 命中·已删除到档案] [bucket_id:{bucket_id}] "
+         "[状态:已退出日常记忆，原文仍保留]"
+     )
++    header = dated(header, bucket, date_on)   # 二改第 8c 刀
+     rendered, _ = render_stored_bucket(bucket, header, footprint)
+     rendered += (
+         "\n[反思：这条记忆对当下的我有帮助吗？它值得被再次回忆吗？]"
+@@ -267,6 +271,8 @@ def _similarity_tag(bucket: dict) -> str:
+ _PARTIAL_LINES_MAX = 10      # June 11-27 定：最多 10 行
+ _PARTIAL_TITLE_CHARS = 20    # June 11-27 定：没标题时取正文开头 20 字
+ _PARTIAL_BLOCK_HEADER = "=== 只中了部分词，没展开（按桶 ID 搜可看全文） ==="
++# 二改第 8c 刀：命中了、但 token 放不下全文的，退成一行。
++_OVERFLOW_BLOCK_HEADER = "=== 放不下全文，只列一行（按桶 ID 搜可看全文） ==="
+ 
+ 
+ def _query_split_enabled() -> bool:
+@@ -366,6 +372,7 @@ async def surface_search(
+     # immediately before trace(content=...) without an LLM or derived index in
+     # the path.  Archived/deleted and dedicated bucket types keep the same
+     # visibility boundary as ordinary search.
++    overflow_on = overflow_lines_enabled()   # 二改第 8c 刀
+     exact_id = query.strip()
+     try:
+         exact_reader = getattr(rt.bucket_mgr, "get_including_archive", None)
+@@ -397,7 +404,7 @@ async def surface_search(
+             and _bucket_in_created_range(exact_bucket, created_from, created_to)
+         ):
+             rendered, entry_tokens = _render_archived_hit(
+-                exact_bucket, _footprint(exact_bucket)
++                exact_bucket, _footprint(exact_bucket), overflow_on
+             )
+             return rendered if entry_tokens <= max_tokens else _BUDGET_NOTICE
+         if (
+@@ -414,8 +421,12 @@ async def surface_search(
+             )
+             rendered, entry_tokens = render_stored_bucket(
+                 exact_bucket,
+-                f"{protected_mark}[exact_bucket_id:true] "
+-                f"[bucket_id:{exact_bucket['id']}]",
++                dated(
++                    f"{protected_mark}[exact_bucket_id:true] "
++                    f"[bucket_id:{exact_bucket['id']}]",
++                    exact_bucket,
++                    overflow_on,
++                ),
+                 _footprint(exact_bucket),
+             )
+             if entry_tokens > max_tokens:
+@@ -497,28 +508,36 @@ async def surface_search(
+     budget_blocked = False
+     touched_ids: list = []   # 性能 P2：浮现后统一在后台 touch，不在响应路径逐条 await
+     touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
++    overflow_full: list = []     # 二改第 8c 刀：放不下全文的命中
++    budget_partial: list = []    # 二改第 8c 刀：放不下全文的部分命中
+     for idx, bucket in enumerate(matches):
+         meta = bucket["metadata"]
+         bucket_id = bucket["id"]
+         if _is_archived(bucket):
+-            rendered, entry_tokens = _render_archived_hit(bucket, _footprint(bucket))
++            rendered, entry_tokens = _render_archived_hit(
++                bucket, _footprint(bucket), overflow_on
++            )
+         elif parse_bool(meta.get("protected"), default=False):
+-            header = f"🛡️ [受保护记忆] [bucket_id:{bucket_id}]"
++            header = dated(f"🛡️ [受保护记忆] [bucket_id:{bucket_id}]", bucket, overflow_on)
+             rendered, entry_tokens = render_stored_bucket(
+                 bucket, header, _footprint(bucket)
+             )
+         elif meta.get("pinned") or meta.get("type") == "permanent":
+-            header = f"📌 [核心准则] [bucket_id:{bucket_id}]"
++            header = dated(f"📌 [核心准则] [bucket_id:{bucket_id}]", bucket, overflow_on)
+             rendered, entry_tokens = render_stored_bucket(
+                 bucket, header, _footprint(bucket)
+             )
+         elif bucket.get("vector_match"):
+-            header = f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]"
++            header = dated(
++                f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]",
++                bucket,
++                overflow_on,
++            )
+             rendered, entry_tokens = render_stored_bucket(
+                 bucket, header, _footprint(bucket)
+             )
+         else:
+-            header = f"[bucket_id:{bucket_id}]"
++            header = dated(f"[bucket_id:{bucket_id}]", bucket, overflow_on)
+             rendered, entry_tokens = render_stored_bucket(
+                 bucket, header, _footprint(bucket)
+             )
+@@ -528,6 +547,13 @@ async def surface_search(
+             entry_tokens = count_tokens_approx(rendered)
+         if token_used + entry_tokens > max_tokens:
+             budget_blocked = True
++            if overflow_on:
++                # 二改第 8c 刀：放不下的这条退成一行，后面放得下的照样给全文。
++                if bucket.get("partial_only"):
++                    budget_partial.append(bucket)
++                else:
++                    overflow_full.append(bucket)
++                continue
+             # 二改第 9 刀：token 放不下的部分命中，也退成一行。
+             overflow_partial = [
+                 b for b in matches[idx:] if b.get("partial_only")
+@@ -545,6 +571,23 @@ async def surface_search(
+     if touched_ids:
+         asyncio.create_task(rt.bucket_mgr.touch_many(touched_ids, ripple=False))
+ 
++    # 二改第 8c 刀：放不下全文的命中每条退成一行，算进 token 预算；
++    # 一行也放不下的照实说还有几条。部分命中排在它们后面（第 9 刀那一段）。
++    if overflow_full:
++        lines, used, left = fit_lines(
++            overflow_full, max_tokens - token_used, _OVERFLOW_BLOCK_HEADER
++        )
++        token_used += used
++        if lines:
++            block = [_OVERFLOW_BLOCK_HEADER] + lines
++            if left:
++                block.append(f"还有 {left} 条没显示")
++            results.append("\n".join(block))
++        else:
++            results.append(f"[还有 {left} 条命中放不下全文，也放不下一行：token 预算不够]")
++    if budget_partial:
++        overflow_partial = budget_partial + overflow_partial
++
+     # 二改第 9 刀：放不下的部分命中每条退成一行，最多 10 行，算进 token 预算。
+     # 一行放不下就停；没列出来的有几条，照实数说。
+     if overflow_partial:
+@@ -597,7 +640,7 @@ async def surface_search(
+                 for b in drifted:
+                     rendered, entry_tokens = render_stored_bucket(
+                         b,
+-                        f"[联想浮现·非检索命中] [bucket_id:{b['id']}]",
++                        dated(f"[联想浮现·非检索命中] [bucket_id:{b['id']}]", b, overflow_on),
+                         _footprint(b),
+                     )
+                     if token_used + entry_tokens > max_tokens:
+diff --git a/src/tools/breath/surface.py b/src/tools/breath/surface.py
+index ace03ab..eb5174c 100644
+--- a/src/tools/breath/surface.py
++++ b/src/tools/breath/surface.py
+@@ -36,6 +36,7 @@ from ombrebrain.policy.surfacing import SurfacePolicyVM
+ from .. import _runtime as rt
+ from ..plan.core import is_letter_bucket
+ from utils import parse_bool, parse_iso_datetime, strip_wikilinks
++from ._overflow import dated, fit_lines, overflow_lines_enabled
+ from ._verbatim import render_stored_bucket
+ 
+ # U-07 fix: throttle the sampling-fallback INFO log to once per 5 minutes.
+@@ -49,6 +50,8 @@ _BUDGET_NOTICE = (
+     "已返回正文均保持完整，未截断或摘要。"
+     "当前约使用 {used}/{limit} token，如需被省略的整桶请提高 max_tokens 后重试。"
+ )
++# 二改第 8c 刀：放不下全文的浮现记忆退成一行时，那几行前面的说明。
++_OVERFLOW_LINES_HEADER = "（预算放不下全文，只列一行，按桶 ID 搜可看全文：）"
+ 
+ 
+ def _bucket_has_tags(meta: dict, tag_filter: list) -> bool:
+@@ -109,6 +112,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     pinned_results = []
+     token_budget = max_tokens
+     primary_omitted = 0
++    overflow_on = overflow_lines_enabled()   # 二改第 8c 刀
+     # 二改第 8b 刀：核心准则用独立预算 surfacing.breath_core_max_tokens（默认 6000），
+     # 不再先吃掉浮现记忆的 max_tokens。放不下全文的准则退成一行开头（照计划段的做法），
+     # 不截断正文。设成 0 回到旧行为：准则和浮现记忆共用 max_tokens，放不下的计入省略数。
+@@ -123,7 +127,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+         try:
+             rendered, entry_tokens = render_stored_bucket(
+                 b,
+-                f"📌 [核心准则] [bucket_id:{b['id']}]",
++                dated(f"📌 [核心准则] [bucket_id:{b['id']}]", b, overflow_on),
+                 _footprint(b),
+             )
+             if core_separate:
+@@ -303,15 +307,19 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     candidates = candidates[:max_results]
+ 
+     dynamic_results = []
++    dynamic_overflow = []   # 二改第 8c 刀：放不下全文的，退成一行
+     for b in candidates:
+         try:
+             score = rt.decay_engine.calculate_score(b["metadata"])
+             rendered, entry_tokens = render_stored_bucket(
+                 b,
+-                f"[权重:{score:.2f}] [bucket_id:{b['id']}]",
++                dated(f"[权重:{score:.2f}] [bucket_id:{b['id']}]", b, overflow_on),
+                 _footprint(b),
+             )
+             if entry_tokens > token_budget:
++                if overflow_on:
++                    dynamic_overflow.append(b)
++                    continue
+                 primary_omitted += 1
+                 continue
+             dynamic_results.append(rendered)
+@@ -320,7 +328,19 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+             rt.logger.warning(f"Failed to render surfaced bucket / 浮现渲染失败: {e}")
+             continue
+ 
+-    if not pinned_results and not core_title_lines and not dynamic_results:
++    # 二改第 8c 刀：放不下全文的每条退成一行，算进预算；一行也放不下的才算省略。
++    dynamic_lines: list[str] = []
++    if dynamic_overflow:
++        dynamic_lines, used, left = fit_lines(
++            dynamic_overflow, token_budget, _OVERFLOW_LINES_HEADER
++        )
++        token_budget -= used
++        primary_omitted += left
++
++    if (
++        not pinned_results and not core_title_lines and not dynamic_results
++        and not dynamic_lines
++    ):
+         if primary_omitted:
+             return _budget_notice(
+                 omitted=primary_omitted,
+@@ -368,13 +388,14 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+                     cond_b = False
+             if cond_a or cond_b:
+                 passive_pool.append(b)
+-        if passive_pool and not primary_omitted:
++        # 二改第 8c 刀：放不下的已经退成一行，不再因为有省略就整段不跑。
++        if passive_pool and (overflow_on or not primary_omitted):
+             random.shuffle(passive_pool)
+             for b in passive_pool[:2]:
+                 try:
+                     rendered, entry_tokens = render_stored_bucket(
+                         b,
+-                        f"💤 [久未浮现] [bucket_id:{b['id']}]",
++                        dated(f"💤 [久未浮现] [bucket_id:{b['id']}]", b, overflow_on),
+                         _footprint(b),
+                     )
+                     if entry_tokens > token_budget:
+@@ -390,7 +411,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+     # 设计意图：让已解决的记忆有小概率重新出现，制造"忽然想起"的温度。
+     # 与无结果兜底逻辑并存；不替换主流程。
+     dream_results: list[str] = []
+-    if not primary_omitted and random.random() < 0.03:
++    if (overflow_on or not primary_omitted) and random.random() < 0.03:   # 二改第 8c 刀
+         try:
+             shown_ids = {b["id"] for b in candidates}
+             resolved_pool = [
+@@ -411,7 +432,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+                     try:
+                         rendered, entry_tokens = render_stored_bucket(
+                             b,
+-                            f"✨ [偶遇] [bucket_id:{b['id']}]",
++                            dated(f"✨ [偶遇] [bucket_id:{b['id']}]", b, overflow_on),
+                             _footprint(b),
+                         )
+                         if entry_tokens > token_budget:
+@@ -445,8 +466,15 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
+                 + "\n".join(plan_title_lines)
+             )
+         parts.append(plan_block)
+-    if dynamic_results:
+-        parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
++    if dynamic_results or dynamic_lines:
++        dynamic_block = "=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results)
++        if dynamic_lines:   # 二改第 8c 刀
++            dynamic_block += (
++                ("\n\n" if dynamic_results else "")
++                + _OVERFLOW_LINES_HEADER + "\n"
++                + "\n".join(dynamic_lines)
++            )
++        parts.append(dynamic_block)
+     if passive_results:
+         parts.append("=== 久未浮现 ===\n" + "\n---\n".join(passive_results))
+     if dream_results:
+diff --git a/tests/test_breath_core_budget_switch.py b/tests/test_breath_core_budget_switch.py
+index aaed63e..4f14d6f 100644
+--- a/tests/test_breath_core_budget_switch.py
++++ b/tests/test_breath_core_budget_switch.py
+@@ -115,7 +115,7 @@ async def test_default_core_does_not_eat_memory_budget():
+ async def test_switch_zero_restores_shared_budget():
+     core = _pinned("core", "核心准则正文" * 20)
+     mem = _memory("mem", "今天的一件事" * 50)
+-    _install([core, mem], {"breath_core_max_tokens": 0})
++    _install([core, mem], {"breath_core_max_tokens": 0, "overflow_lines": False})
+     core_cost = _cost(core, "📌 [核心准则] [bucket_id:core]")
+     mem_cost = _cost(mem, "[权重:9.00] [bucket_id:mem]")
+ 
+@@ -177,7 +177,7 @@ async def test_memory_default_budget_is_20000():
+ @pytest.mark.asyncio
+ async def test_configured_memory_budget_still_wins():
+     buckets = [_memory(f"m{i}", "很长的一天" * 200, importance=9) for i in range(10)]
+-    _install(buckets, {"breath_max_tokens": 10000})
++    _install(buckets, {"breath_max_tokens": 10000, "overflow_lines": False})
+ 
+     output = await dispatch()
+ 
+diff --git a/tests/test_overflow_lines_switch.py b/tests/test_overflow_lines_switch.py
+new file mode 100644
+index 0000000..daf5d5c
+--- /dev/null
++++ b/tests/test_overflow_lines_switch.py
+@@ -0,0 +1,308 @@
++"""二改第 8c 刀：breath 放不下全文的桶退成一行，头部带创建日期。
++
++原来：
++- 不传 query 的浮现：放不下剩余预算的桶整条跳过，只说「有 N 条没返回」；
++  只要跳过过一条，「久未浮现」「偶然想起」两段整段不跑。
++- 传 query 的检索：碰到第一条放不下的就全部停下，后面的都不显示。
++- 每条头部没有日期。
++
++现在：
++- 放不下全文的桶退成一行「标题 | 创建日期 | 全文 N 字 | 桶ID」，不给半截正文；
++  没标题取正文开头 20 字。后面放得下的照样给全文。
++- 这些行算进预算；一行也放不下的，照实说还有几条。
++- 连带关闭去掉。
++- 每条头部末尾带创建日期 YYYY-MM-DD。
++- 开关 surfacing.overflow_lines，默认开；false 三件事一起回到旧行为。
++"""
++
++from unittest.mock import MagicMock
++
++import pytest
++
++import tools._runtime as rt
++from tools.breath import dispatch
++from tools.breath._overflow import overflow_lines_enabled
++
++
++class _Decay:
++    is_running = True
++
++    async def ensure_started(self):
++        return None
++
++    def calculate_score(self, meta):
++        return float(meta.get("importance") or 5)
++
++
++class _DisabledEmbedding:
++    enabled = False
++
++    async def search_similar(self, query, top_k=20):
++        return []
++
++
++class _Manager:
++    def __init__(self, buckets):
++        self.buckets = list(buckets)
++        self.touched = []
++
++    async def get(self, bucket_id):
++        return next((b for b in self.buckets if b["id"] == bucket_id), None)
++
++    async def list_all(self, include_archive=False):
++        return list(self.buckets)
++
++    async def search(self, query, **kwargs):
++        return list(self.buckets)
++
++    async def touch_many(self, bucket_ids, ripple=False):
++        self.touched.extend(bucket_ids)
++
++    async def get_stats(self):
++        return {"permanent_count": 0, "dynamic_count": len(self.buckets)}
++
++
++def _install(monkeypatch, buckets, surfacing=None):
++    manager = _Manager(buckets)
++    monkeypatch.setattr(rt, "config", {"surfacing": dict(surfacing or {})})
++    monkeypatch.setattr(rt, "bucket_mgr", manager)
++    monkeypatch.setattr(rt, "decay_engine", _Decay())
++    monkeypatch.setattr(rt, "dehydrator", MagicMock())
++    monkeypatch.setattr(rt, "embedding_engine", _DisabledEmbedding())
++    monkeypatch.setattr(rt, "logger", MagicMock())
++    monkeypatch.setattr(rt, "fire_webhook", None)
++    monkeypatch.setattr(rt, "mark_op", None)
++    monkeypatch.setattr(rt, "record_v3_tool_event", lambda *_a, **_k: None)
++    return manager
++
++
++@pytest.fixture(autouse=True)
++def _no_randomness(monkeypatch):
++    monkeypatch.setattr("tools.breath.surface.random.shuffle", lambda items: None)
++    monkeypatch.setattr("tools.breath.surface.random.random", lambda: 1.0)
++
++
++def _memory(bucket_id, content, *, name=None, importance=9, created="2026-11-20T10:00:00",
++            last_active=None, activation_count=1, **extra):
++    meta = {
++        "name": bucket_id if name is None else name,
++        "type": "dynamic",
++        "importance": importance,
++        "activation_count": activation_count,
++        "domain": [],
++        "created": created,
++    }
++    if last_active:
++        meta["last_active"] = last_active
++    bucket = {"id": bucket_id, "content": content, "metadata": meta}
++    bucket.update(extra)
++    return bucket
++
++
++_LONG = "很长的一天。" * 400          # 远远超过下面用的预算
++_LONG_CHARS = len(_LONG)
++
++
++# ---------------------------------------------------------------------------
++# 开关
++# ---------------------------------------------------------------------------
++
++@pytest.mark.parametrize(
++    "surfacing, expected",
++    [
++        ({}, True),
++        ({"overflow_lines": True}, True),
++        ({"overflow_lines": "随便写的"}, True),
++        ({"overflow_lines": False}, False),
++        ({"overflow_lines": "off"}, False),
++        ({"overflow_lines": "false"}, False),
++    ],
++)
++def test_switch_parsing(monkeypatch, surfacing, expected):
++    monkeypatch.setattr(rt, "config", {"surfacing": surfacing})
++    assert overflow_lines_enabled() is expected
++
++
++def test_switch_missing_config_defaults_on(monkeypatch):
++    monkeypatch.setattr(rt, "config", None)
++    assert overflow_lines_enabled() is True
++
++
++# ---------------------------------------------------------------------------
++# 不传 query 的浮现
++# ---------------------------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_surface_header_has_created_date(monkeypatch):
++    _install(monkeypatch, [_memory("mem", "今天的一件事。")])
++    output = await dispatch(max_tokens=20000)
++    assert "[权重:9.00] [bucket_id:mem] 2026-11-20\n" in output
++
++
++@pytest.mark.asyncio
++async def test_surface_overflow_becomes_line_and_next_still_full(monkeypatch):
++    big = _memory("big", _LONG, name="很长的一条", importance=10)
++    small = _memory("small", "一件短短的事。", importance=9)
++    _install(monkeypatch, [big, small])
++    output = await dispatch(max_tokens=300)
++
++    assert _LONG not in output
++    assert f"很长的一条 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
++    assert "（预算放不下全文，只列一行，按桶 ID 搜可看全文：）" in output
++    # 排在后面、放得下的照样给全文
++    assert "一件短短的事。" in output
++    # 退成一行不算省略
++    assert "token 预算不足" not in output
++
++
++@pytest.mark.asyncio
++async def test_surface_line_without_title_uses_first_20_chars(monkeypatch):
++    body = "一二三四五六七八九十\n甲乙丙丁戊己庚辛壬癸子丑寅卯" + "很长" * 800
++    _install(monkeypatch, [_memory("old", body, name="")])
++    output = await dispatch(max_tokens=200)
++    assert "一二三四五六七八九十 甲乙丙丁戊己庚辛壬 | 2026-11-20 | 全文" in output
++
++
++@pytest.mark.asyncio
++async def test_surface_line_counts_against_budget(monkeypatch):
++    buckets = [
++        _memory(f"m{i}", _LONG, name=f"第{i}条很长的记忆", importance=9)
++        for i in range(3)
++    ]
++    _install(monkeypatch, buckets)
++    # 预算小到连一行都放不下：照实说有几条没返回
++    output = await dispatch(max_tokens=5)
++    assert "第0条很长的记忆" not in output
++    assert "有 3 条主要浮现记忆因放不下剩余预算而未返回" in output
++
++
++@pytest.mark.asyncio
++async def test_surface_passive_still_runs_when_something_overflowed(monkeypatch):
++    big = _memory("big", _LONG, name="很长的一条", importance=10)
++    sleepy = _memory(
++        "sleepy", "很久没想起的一件事。", importance=9,
++        last_active="2026-01-01T00:00:00",
++    )
++    _install(monkeypatch, [big, sleepy])
++    output = await dispatch(max_tokens=300, max_results=1)
++    assert "很长的一条 | 2026-11-20" in output
++    assert "=== 久未浮现 ===" in output
++    assert "💤 [久未浮现] [bucket_id:sleepy] 2026-11-20" in output
++
++
++@pytest.mark.asyncio
++async def test_surface_switch_off_restores_old_behavior(monkeypatch):
++    big = _memory("big", _LONG, name="很长的一条", importance=10)
++    sleepy = _memory(
++        "sleepy", "很久没想起的一件事。", importance=9,
++        last_active="2026-01-01T00:00:00",
++    )
++    _install(monkeypatch, [big, sleepy], {"overflow_lines": False})
++    output = await dispatch(max_tokens=300, max_results=1)
++    assert "很长的一条 |" not in output
++    assert "有 1 条主要浮现记忆因放不下剩余预算而未返回" in output
++    # 旧行为：有省略时「久未浮现」整段不跑
++    assert "久未浮现" not in output
++    # 旧行为：头部没有日期
++    small_out = await dispatch(max_tokens=20000, max_results=2)
++    assert "[权重:10.00] [bucket_id:big]\n" in small_out
++
++
++# ---------------------------------------------------------------------------
++# 传 query 的检索
++# ---------------------------------------------------------------------------
++
++def _hit(bucket_id, content, *, name=None, **extra):
++    return _memory(bucket_id, content, name=name, literal_hit=True, semantic_score=None, **extra)
++
++
++@pytest.mark.asyncio
++async def test_search_header_has_created_date(monkeypatch):
++    _install(monkeypatch, [_hit("a", "跳舞的一天。")])
++    output = await dispatch(query="跳舞", max_results=5, max_tokens=20000)
++    assert "[bucket_id:a] 2026-11-20\n" in output
++
++
++@pytest.mark.asyncio
++async def test_search_overflow_becomes_line_and_next_still_full(monkeypatch):
++    manager = _install(monkeypatch, [
++        _hit("big", _LONG, name="很长的一条"),
++        _hit("small", "跳舞的一天。"),
++    ])
++    output = await dispatch(query="跳舞", max_results=5, max_tokens=300)
++    assert _LONG not in output
++    assert "=== 放不下全文，只列一行（按桶 ID 搜可看全文） ===" in output
++    assert f"很长的一条 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
++    assert "跳舞的一天。" in output
++    # 退成一行的不算想起
++    import asyncio
++    await asyncio.sleep(0)
++    assert manager.touched == ["small"]
++
++
++@pytest.mark.asyncio
++async def test_search_lines_that_do_not_fit_are_counted(monkeypatch):
++    _install(monkeypatch, [
++        _hit("a", _LONG, name="第一条很长的记忆标题"),
++        _hit("b", _LONG, name="第二条很长的记忆标题"),
++    ])
++    output = await dispatch(query="跳舞", max_results=5, max_tokens=5)
++    assert "第一条很长的记忆标题" not in output
++    assert "[还有 2 条命中放不下全文，也放不下一行：token 预算不够]" in output
++
++
++@pytest.mark.asyncio
++async def test_search_overflow_lines_come_before_partial_lines(monkeypatch):
++    full = _hit("full", _LONG, name="全中但很长", literal_terms=(2, 2), partial_only=False)
++    part = _memory(
++        "part", "只写了爵士。", name="部分命中", literal_hit=False, semantic_score=None,
++        literal_terms=(1, 2), partial_only=True,
++    )
++    extra = _memory(
++        "extra", "也只写了爵士。", name="又一条部分命中", literal_hit=False, semantic_score=None,
++        literal_terms=(1, 2), partial_only=True,
++    )
++    _install(monkeypatch, [full, part, extra])
++    output = await dispatch(query="舞蹈 爵士", max_results=2, max_tokens=400)
++    assert "全中但很长 | 2026-11-20 | 全文" in output
++    assert "[字面 1/2] [bucket_id:part] 2026-11-20" in output
++    assert "又一条部分命中 | 字面 1/2 | 2026-11-20 | extra" in output
++    assert output.index("全中但很长 |") < output.index("又一条部分命中 |")
++
++
++@pytest.mark.asyncio
++async def test_search_switch_off_restores_old_behavior(monkeypatch):
++    _install(monkeypatch, [
++        _hit("big", _LONG, name="很长的一条"),
++        _hit("small", "跳舞的一天。"),
++    ], {"overflow_lines": False})
++    output = await dispatch(query="跳舞", max_results=5, max_tokens=300)
++    # 旧行为：碰到第一条放不下的就停，后面的都不显示，也没有那一行
++    assert "很长的一条 |" not in output
++    assert "跳舞的一天。" not in output
++    assert "token 预算不足" in output
++    no_date = await dispatch(query="跳舞", max_results=5, max_tokens=20000)
++    assert "[bucket_id:small]\n" in no_date
++
++
++@pytest.mark.asyncio
++async def test_search_switch_off_keeps_cut9_partial_lines(monkeypatch):
++    """关掉 8c 时，第 9 刀「token 放不下的部分命中退成一行」照旧。"""
++    full = _hit("full", "两个词都中。", literal_terms=(2, 2), partial_only=False)
++    part = _memory(
++        "part", _LONG, name="部分命中很长", literal_hit=False, semantic_score=None,
++        literal_terms=(1, 2), partial_only=True,
++    )
++    _install(monkeypatch, [full, part], {"overflow_lines": False})
++    output = await dispatch(query="舞蹈 爵士", max_results=5, max_tokens=300)
++    assert "[字面 2/2] [bucket_id:full]" in output
++    assert "部分命中很长 | 字面 1/2 | 2026-11-20 | part" in output
++
++
++@pytest.mark.asyncio
++async def test_exact_id_header_has_created_date(monkeypatch):
++    bucket = _memory("4f3a2b1c0d9e", "按编号读的一条。")
++    _install(monkeypatch, [bucket])
++    output = await dispatch(query="4f3a2b1c0d9e", max_tokens=20000)
++    assert "[exact_bucket_id:true] [bucket_id:4f3a2b1c0d9e] 2026-11-20\n" in output
++    assert "按编号读的一条。" in output
