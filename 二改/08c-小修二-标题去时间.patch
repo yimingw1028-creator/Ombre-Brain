@@ -1,0 +1,134 @@
+diff --git a/src/tools/breath/_overflow.py b/src/tools/breath/_overflow.py
+index 96c1ded..79849df 100644
+--- a/src/tools/breath/_overflow.py
++++ b/src/tools/breath/_overflow.py
+@@ -14,9 +14,15 @@
+ 的相关度更低）。浮现：只这一条退成一行，后面放得下的照样给全文（浮现的顺序是加权
+ 随机洗过的，排在后面的不一定不重要）。
+ 
++8c 小修二（11-27）：上游新建桶时把创建时间写进名字（「2026-11-08 03-51-12 标题」，
++bucket_manager.create()），那一行又单列了日期，重复了。拼那一行时把名字开头那串
++「年-月-日 时-分-秒」略去不显示；去掉后什么都不剩就用正文开头 20 字。库里的名字不动。
++
+ 开关：config.yaml 里 surfacing.overflow_lines: false → 三件事一起回到旧行为。
+ """
+ 
++import re
++
+ from utils import count_tokens_approx, parse_iso_datetime, strip_wikilinks
+ 
+ from .. import _runtime as rt
+@@ -24,6 +30,8 @@ from ._verbatim import stored_bucket_content
+ 
+ LINE_TITLE_CHARS = 20   # June 11-27 定：没标题时取正文开头 20 字，和第 9 刀那一行对齐
+ LINES_MAX = 10          # 8c 小修：一段最多列 10 行，沿用 June 11-27 给第 9 刀定的上限
++# 8c 小修二：上游 create() 给名字加的时间前缀，只认正好是「年-月-日 时-分-秒」的那一串
++_NAME_TS_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}-\d{2}-\d{2}(?=\s|$)\s*")
+ 
+ 
+ def overflow_lines_enabled() -> bool:
+@@ -57,9 +65,17 @@ def dated(header: str, bucket: dict, enabled: bool) -> str:
+     return f"{header} {date}" if date else header
+ 
+ 
++def display_name(meta: dict, strip_timestamp: bool = True) -> str:
++    """名字折掉多余空白；strip_timestamp 时去掉开头上游自动加的时间（8c 小修二）。"""
++    name = " ".join(str((meta or {}).get("name") or "").split())
++    if strip_timestamp:
++        name = _NAME_TS_PREFIX.sub("", name, count=1)
++    return name
++
++
+ def line_title(bucket: dict) -> str:
+     meta = bucket.get("metadata") or {}
+-    title = " ".join(str(meta.get("name") or "").split())
++    title = display_name(meta)
+     if title:
+         return title
+     body = " ".join(str(bucket.get("content") or "").split())
+diff --git a/src/tools/breath/search.py b/src/tools/breath/search.py
+index 8806a5d..ad90abc 100644
+--- a/src/tools/breath/search.py
++++ b/src/tools/breath/search.py
+@@ -41,6 +41,7 @@ from ..plan.core import is_letter_bucket
+ from ._overflow import (
+     LINES_MAX,
+     dated,
++    display_name,
+     fit_lines,
+     lines_cost,
+     overflow_lines_enabled,
+@@ -323,7 +324,8 @@ def _literal_terms_tag(bucket: dict) -> str:
+ def _partial_line(bucket: dict) -> str:
+     """放不下的部分命中退成一行：标题 | 字面 k/n | 创建日期 | 桶ID。"""
+     meta = bucket.get("metadata", {}) or {}
+-    title = " ".join(str(meta.get("name") or "").split())
++    # 二改第 8c 刀小修二：开关开着时，名字开头上游自动加的时间不显示
++    title = display_name(meta, overflow_lines_enabled())
+     if not title:
+         body = " ".join(str(bucket.get("content") or "").split())
+         title = body[:_PARTIAL_TITLE_CHARS] or "（无标题）"
+diff --git a/tests/test_overflow_lines_switch.py b/tests/test_overflow_lines_switch.py
+index 5fa1a3b..9050bf1 100644
+--- a/tests/test_overflow_lines_switch.py
++++ b/tests/test_overflow_lines_switch.py
+@@ -375,3 +375,59 @@ async def test_surface_reserves_room_for_lines(monkeypatch):
+     # 第 11 条起没列出来的，照实算进「有 N 条没返回」
+     assert f"有 {18 - len(full) - 10} 条主要浮现记忆因放不下剩余预算而未返回" in output
+ 
++
++# ---------------------------------------------------------------------------
++# 8c 小修二：那一行不显示名字开头上游自动加的时间
++# ---------------------------------------------------------------------------
++
++@pytest.mark.asyncio
++async def test_surface_line_strips_upstream_timestamp_from_name(monkeypatch):
++    big = _memory("big", _LONG, name="2026-11-08 03-51-12 11月8日周日早上去跑步", importance=10)
++    _install(monkeypatch, [big])
++    output = await dispatch(max_tokens=300)
++    assert f"11月8日周日早上去跑步 | 2026-11-20 | 全文 {_LONG_CHARS} 字 | big" in output
++    assert "03-51-12" not in output
++
++
++@pytest.mark.asyncio
++async def test_line_with_timestamp_only_name_falls_back_to_content(monkeypatch):
++    body = "11月8日周日早上醒来先去操场跑了三圈，回来洗澡吃早饭。" + "很长" * 800
++    _install(monkeypatch, [_memory("old", body, name="2026-11-08 03-51-12")])
++    output = await dispatch(max_tokens=200)
++    assert "11月8日周日早上醒来先去操场跑了三圈， | 2026-11-20 | 全文" in output
++    assert "03-51-12" not in output
++
++
++@pytest.mark.asyncio
++async def test_line_keeps_titles_that_only_start_with_a_date(monkeypatch):
++    big = _memory("big", _LONG, name="2026-11-08 那天", importance=10)
++    _install(monkeypatch, [big])
++    output = await dispatch(max_tokens=300)
++    assert "2026-11-08 那天 | 2026-11-20 | 全文" in output
++
++
++@pytest.mark.asyncio
++async def test_search_lines_strip_timestamp_both_kinds(monkeypatch):
++    full = _hit("full", _LONG, name="2026-11-08 03-51-12 香水柜", literal_terms=(2, 2), partial_only=False)
++    part = _memory(
++        "part", "只写了香水。", name="2026-11-09 22-10-05 睡前挑香水",
++        literal_hit=False, semantic_score=None, literal_terms=(1, 2), partial_only=True,
++    )
++    _install(monkeypatch, [full, part])
++    output = await dispatch(query="香水 柜子", max_results=5, max_tokens=300)
++    assert "香水柜 | 2026-11-20 | 全文" in output
++    assert "睡前挑香水 | 字面 1/2 | 2026-11-20 | part" in output
++    assert "03-51-12" not in output and "22-10-05" not in output
++
++
++@pytest.mark.asyncio
++async def test_switch_off_keeps_timestamp_in_cut9_line(monkeypatch):
++    full = _hit("full", "两个词都中。", literal_terms=(2, 2), partial_only=False)
++    part = _memory(
++        "part", _LONG, name="2026-11-09 22-10-05 睡前挑香水",
++        literal_hit=False, semantic_score=None, literal_terms=(1, 2), partial_only=True,
++    )
++    _install(monkeypatch, [full, part], {"overflow_lines": False})
++    output = await dispatch(query="香水 柜子", max_results=5, max_tokens=300)
++    assert "2026-11-09 22-10-05 睡前挑香水 | 字面 1/2 | 2026-11-20 | part" in output
++
