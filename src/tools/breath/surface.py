@@ -36,6 +36,7 @@ from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
 from utils import parse_bool, parse_iso_datetime, strip_wikilinks
+from ._overflow import dated, fit_lines, overflow_lines_enabled
 from ._verbatim import render_stored_bucket
 
 # U-07 fix: throttle the sampling-fallback INFO log to once per 5 minutes.
@@ -49,6 +50,8 @@ _BUDGET_NOTICE = (
     "已返回正文均保持完整，未截断或摘要。"
     "当前约使用 {used}/{limit} token，如需被省略的整桶请提高 max_tokens 后重试。"
 )
+# 二改第 8c 刀：放不下全文的浮现记忆退成一行时，那几行前面的说明。
+_OVERFLOW_LINES_HEADER = "（预算放不下全文，只列一行，按桶 ID 搜可看全文：）"
 
 
 def _bucket_has_tags(meta: dict, tag_filter: list) -> bool:
@@ -109,6 +112,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     pinned_results = []
     token_budget = max_tokens
     primary_omitted = 0
+    overflow_on = overflow_lines_enabled()   # 二改第 8c 刀
     # 二改第 8b 刀：核心准则用独立预算 surfacing.breath_core_max_tokens（默认 6000），
     # 不再先吃掉浮现记忆的 max_tokens。放不下全文的准则退成一行开头（照计划段的做法），
     # 不截断正文。设成 0 回到旧行为：准则和浮现记忆共用 max_tokens，放不下的计入省略数。
@@ -123,7 +127,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
         try:
             rendered, entry_tokens = render_stored_bucket(
                 b,
-                f"📌 [核心准则] [bucket_id:{b['id']}]",
+                dated(f"📌 [核心准则] [bucket_id:{b['id']}]", b, overflow_on),
                 _footprint(b),
             )
             if core_separate:
@@ -303,15 +307,19 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     candidates = candidates[:max_results]
 
     dynamic_results = []
+    dynamic_overflow = []   # 二改第 8c 刀：放不下全文的，退成一行
     for b in candidates:
         try:
             score = rt.decay_engine.calculate_score(b["metadata"])
             rendered, entry_tokens = render_stored_bucket(
                 b,
-                f"[权重:{score:.2f}] [bucket_id:{b['id']}]",
+                dated(f"[权重:{score:.2f}] [bucket_id:{b['id']}]", b, overflow_on),
                 _footprint(b),
             )
             if entry_tokens > token_budget:
+                if overflow_on:
+                    dynamic_overflow.append(b)
+                    continue
                 primary_omitted += 1
                 continue
             dynamic_results.append(rendered)
@@ -320,7 +328,19 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
             rt.logger.warning(f"Failed to render surfaced bucket / 浮现渲染失败: {e}")
             continue
 
-    if not pinned_results and not core_title_lines and not dynamic_results:
+    # 二改第 8c 刀：放不下全文的每条退成一行，算进预算；一行也放不下的才算省略。
+    dynamic_lines: list[str] = []
+    if dynamic_overflow:
+        dynamic_lines, used, left = fit_lines(
+            dynamic_overflow, token_budget, _OVERFLOW_LINES_HEADER
+        )
+        token_budget -= used
+        primary_omitted += left
+
+    if (
+        not pinned_results and not core_title_lines and not dynamic_results
+        and not dynamic_lines
+    ):
         if primary_omitted:
             return _budget_notice(
                 omitted=primary_omitted,
@@ -368,13 +388,14 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                     cond_b = False
             if cond_a or cond_b:
                 passive_pool.append(b)
-        if passive_pool and not primary_omitted:
+        # 二改第 8c 刀：放不下的已经退成一行，不再因为有省略就整段不跑。
+        if passive_pool and (overflow_on or not primary_omitted):
             random.shuffle(passive_pool)
             for b in passive_pool[:2]:
                 try:
                     rendered, entry_tokens = render_stored_bucket(
                         b,
-                        f"💤 [久未浮现] [bucket_id:{b['id']}]",
+                        dated(f"💤 [久未浮现] [bucket_id:{b['id']}]", b, overflow_on),
                         _footprint(b),
                     )
                     if entry_tokens > token_budget:
@@ -390,7 +411,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
     # 设计意图：让已解决的记忆有小概率重新出现，制造"忽然想起"的温度。
     # 与无结果兜底逻辑并存；不替换主流程。
     dream_results: list[str] = []
-    if not primary_omitted and random.random() < 0.03:
+    if (overflow_on or not primary_omitted) and random.random() < 0.03:   # 二改第 8c 刀
         try:
             shown_ids = {b["id"] for b in candidates}
             resolved_pool = [
@@ -411,7 +432,7 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                     try:
                         rendered, entry_tokens = render_stored_bucket(
                             b,
-                            f"✨ [偶遇] [bucket_id:{b['id']}]",
+                            dated(f"✨ [偶遇] [bucket_id:{b['id']}]", b, overflow_on),
                             _footprint(b),
                         )
                         if entry_tokens > token_budget:
@@ -445,8 +466,15 @@ async def surface_default(max_results: int, max_tokens: int, tag_filter: list) -
                 + "\n".join(plan_title_lines)
             )
         parts.append(plan_block)
-    if dynamic_results:
-        parts.append("=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results))
+    if dynamic_results or dynamic_lines:
+        dynamic_block = "=== 浮现记忆 ===\n" + "\n---\n".join(dynamic_results)
+        if dynamic_lines:   # 二改第 8c 刀
+            dynamic_block += (
+                ("\n\n" if dynamic_results else "")
+                + _OVERFLOW_LINES_HEADER + "\n"
+                + "\n".join(dynamic_lines)
+            )
+        parts.append(dynamic_block)
     if passive_results:
         parts.append("=== 久未浮现 ===\n" + "\n---\n".join(passive_results))
     if dream_results:

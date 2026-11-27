@@ -115,7 +115,7 @@ async def test_default_core_does_not_eat_memory_budget():
 async def test_switch_zero_restores_shared_budget():
     core = _pinned("core", "核心准则正文" * 20)
     mem = _memory("mem", "今天的一件事" * 50)
-    _install([core, mem], {"breath_core_max_tokens": 0})
+    _install([core, mem], {"breath_core_max_tokens": 0, "overflow_lines": False})
     core_cost = _cost(core, "📌 [核心准则] [bucket_id:core]")
     mem_cost = _cost(mem, "[权重:9.00] [bucket_id:mem]")
 
@@ -177,7 +177,7 @@ async def test_memory_default_budget_is_20000():
 @pytest.mark.asyncio
 async def test_configured_memory_budget_still_wins():
     buckets = [_memory(f"m{i}", "很长的一天" * 200, importance=9) for i in range(10)]
-    _install(buckets, {"breath_max_tokens": 10000})
+    _install(buckets, {"breath_max_tokens": 10000, "overflow_lines": False})
 
     output = await dispatch()
 

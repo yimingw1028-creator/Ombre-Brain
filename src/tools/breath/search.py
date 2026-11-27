@@ -37,6 +37,7 @@ from datetime import datetime, time
 from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
+from ._overflow import dated, fit_lines, overflow_lines_enabled
 from ._verbatim import render_stored_bucket
 from utils import count_tokens_approx, parse_bool, parse_iso_datetime
 
@@ -68,7 +69,9 @@ def _is_archived(bucket: dict) -> bool:
     )
 
 
-def _render_archived_hit(bucket: dict, footprint: str) -> tuple[str, int]:
+def _render_archived_hit(
+    bucket: dict, footprint: str, date_on: bool = False
+) -> tuple[str, int]:
     bucket_id = str(bucket.get("id") or "")
     protected_mark = (
         "🛡️ [受保护记忆] "
@@ -82,6 +85,7 @@ def _render_archived_hit(bucket: dict, footprint: str) -> tuple[str, int]:
         f"{protected_mark}[query 命中·已删除到档案] [bucket_id:{bucket_id}] "
         "[状态:已退出日常记忆，原文仍保留]"
     )
+    header = dated(header, bucket, date_on)   # 二改第 8c 刀
     rendered, _ = render_stored_bucket(bucket, header, footprint)
     rendered += (
         "\n[反思：这条记忆对当下的我有帮助吗？它值得被再次回忆吗？]"
@@ -267,6 +271,8 @@ def _similarity_tag(bucket: dict) -> str:
 _PARTIAL_LINES_MAX = 10      # June 11-27 定：最多 10 行
 _PARTIAL_TITLE_CHARS = 20    # June 11-27 定：没标题时取正文开头 20 字
 _PARTIAL_BLOCK_HEADER = "=== 只中了部分词，没展开（按桶 ID 搜可看全文） ==="
+# 二改第 8c 刀：命中了、但 token 放不下全文的，退成一行。
+_OVERFLOW_BLOCK_HEADER = "=== 放不下全文，只列一行（按桶 ID 搜可看全文） ==="
 
 
 def _query_split_enabled() -> bool:
@@ -366,6 +372,7 @@ async def surface_search(
     # immediately before trace(content=...) without an LLM or derived index in
     # the path.  Archived/deleted and dedicated bucket types keep the same
     # visibility boundary as ordinary search.
+    overflow_on = overflow_lines_enabled()   # 二改第 8c 刀
     exact_id = query.strip()
     try:
         exact_reader = getattr(rt.bucket_mgr, "get_including_archive", None)
@@ -397,7 +404,7 @@ async def surface_search(
             and _bucket_in_created_range(exact_bucket, created_from, created_to)
         ):
             rendered, entry_tokens = _render_archived_hit(
-                exact_bucket, _footprint(exact_bucket)
+                exact_bucket, _footprint(exact_bucket), overflow_on
             )
             return rendered if entry_tokens <= max_tokens else _BUDGET_NOTICE
         if (
@@ -414,8 +421,12 @@ async def surface_search(
             )
             rendered, entry_tokens = render_stored_bucket(
                 exact_bucket,
-                f"{protected_mark}[exact_bucket_id:true] "
-                f"[bucket_id:{exact_bucket['id']}]",
+                dated(
+                    f"{protected_mark}[exact_bucket_id:true] "
+                    f"[bucket_id:{exact_bucket['id']}]",
+                    exact_bucket,
+                    overflow_on,
+                ),
                 _footprint(exact_bucket),
             )
             if entry_tokens > max_tokens:
@@ -497,28 +508,36 @@ async def surface_search(
     budget_blocked = False
     touched_ids: list = []   # 性能 P2：浮现后统一在后台 touch，不在响应路径逐条 await
     touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
+    overflow_full: list = []     # 二改第 8c 刀：放不下全文的命中
+    budget_partial: list = []    # 二改第 8c 刀：放不下全文的部分命中
     for idx, bucket in enumerate(matches):
         meta = bucket["metadata"]
         bucket_id = bucket["id"]
         if _is_archived(bucket):
-            rendered, entry_tokens = _render_archived_hit(bucket, _footprint(bucket))
+            rendered, entry_tokens = _render_archived_hit(
+                bucket, _footprint(bucket), overflow_on
+            )
         elif parse_bool(meta.get("protected"), default=False):
-            header = f"🛡️ [受保护记忆] [bucket_id:{bucket_id}]"
+            header = dated(f"🛡️ [受保护记忆] [bucket_id:{bucket_id}]", bucket, overflow_on)
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
         elif meta.get("pinned") or meta.get("type") == "permanent":
-            header = f"📌 [核心准则] [bucket_id:{bucket_id}]"
+            header = dated(f"📌 [核心准则] [bucket_id:{bucket_id}]", bucket, overflow_on)
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
         elif bucket.get("vector_match"):
-            header = f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]"
+            header = dated(
+                f"[语义关联]{_similarity_tag(bucket)} [bucket_id:{bucket_id}]",
+                bucket,
+                overflow_on,
+            )
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
         else:
-            header = f"[bucket_id:{bucket_id}]"
+            header = dated(f"[bucket_id:{bucket_id}]", bucket, overflow_on)
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
@@ -528,6 +547,13 @@ async def surface_search(
             entry_tokens = count_tokens_approx(rendered)
         if token_used + entry_tokens > max_tokens:
             budget_blocked = True
+            if overflow_on:
+                # 二改第 8c 刀：放不下的这条退成一行，后面放得下的照样给全文。
+                if bucket.get("partial_only"):
+                    budget_partial.append(bucket)
+                else:
+                    overflow_full.append(bucket)
+                continue
             # 二改第 9 刀：token 放不下的部分命中，也退成一行。
             overflow_partial = [
                 b for b in matches[idx:] if b.get("partial_only")
@@ -544,6 +570,23 @@ async def surface_search(
     # ripple=False 跳过读全库的时间涟漪。响应不再等这些写盘/涟漪。
     if touched_ids:
         asyncio.create_task(rt.bucket_mgr.touch_many(touched_ids, ripple=False))
+
+    # 二改第 8c 刀：放不下全文的命中每条退成一行，算进 token 预算；
+    # 一行也放不下的照实说还有几条。部分命中排在它们后面（第 9 刀那一段）。
+    if overflow_full:
+        lines, used, left = fit_lines(
+            overflow_full, max_tokens - token_used, _OVERFLOW_BLOCK_HEADER
+        )
+        token_used += used
+        if lines:
+            block = [_OVERFLOW_BLOCK_HEADER] + lines
+            if left:
+                block.append(f"还有 {left} 条没显示")
+            results.append("\n".join(block))
+        else:
+            results.append(f"[还有 {left} 条命中放不下全文，也放不下一行：token 预算不够]")
+    if budget_partial:
+        overflow_partial = budget_partial + overflow_partial
 
     # 二改第 9 刀：放不下的部分命中每条退成一行，最多 10 行，算进 token 预算。
     # 一行放不下就停；没列出来的有几条，照实数说。
@@ -597,7 +640,7 @@ async def surface_search(
                 for b in drifted:
                     rendered, entry_tokens = render_stored_bucket(
                         b,
-                        f"[联想浮现·非检索命中] [bucket_id:{b['id']}]",
+                        dated(f"[联想浮现·非检索命中] [bucket_id:{b['id']}]", b, overflow_on),
                         _footprint(b),
                     )
                     if token_used + entry_tokens > max_tokens:
