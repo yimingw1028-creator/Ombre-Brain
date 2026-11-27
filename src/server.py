@@ -690,7 +690,7 @@ async def breath_search(
     date_from: Optional[str] = "",
     date_to: Optional[str] = "",
 ) -> str:
-    """按关键词/语义检索记忆桶,融合关键词/BM25+语义检索,向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写。domain 逗号分隔,按主题域预筛。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601，同日上下界包含当天全日。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。需要 tags/importance_min/valence/arousal/max_tokens/catalog 等更多过滤维度用 breath_advanced(...)。"""
+    """按关键词/语义检索记忆桶,融合关键词/BM25+语义检索,向量不可用时明确提示并退回关键词检索。命中后逐字返回桶内当前 content，不调用 LLM 摘要/改写。query 里用空格隔开几个词时，每个词各自去找：每个词都中的照常排前面；只中一部分的排在最后、头部标「字面 k/n」、不算想起（不刷新活跃时间），放不下的每条只给一行（标题 | 字面 k/n | 创建日期 | 桶ID），想看全文就用桶 ID 再搜一次。domain 逗号分隔,按主题域预筛。date_from/date_to 按桶的创建时间过滤，支持 YYYY-MM-DD 或 ISO 8601，同日上下界包含当天全日。max_results=返回条数上限(默认 config.surfacing.breath_max_results,fallback 20,最大 50)。需要 tags/importance_min/valence/arousal/max_tokens/catalog 等更多过滤维度用 breath_advanced(...)。"""
     return await _with_notice(
         _t_breath.dispatch(
             query=query, domain=domain, max_results=max_results,

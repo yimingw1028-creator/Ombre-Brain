@@ -13,6 +13,8 @@ tools/breath/search.py — 有 query 的检索模式
 - 命中正文不经过 LLM 摘要、改写或压缩，直接返回当前存储的 content
 - 命中后调 touch()，但不修改本次返回的正文或元数据
 - 检索结果不足时，从低权重旧桶里随机漂出 3-5 条「忽然想起来」
+- 二改第 9 刀：query 里有空格时拆成几个词各自找；全中算字面命中，
+  只中一部分的排最后、不续命，放不下的每条退成一行
 - 命中 0 条时回 webhook 报空，并给出可操作的引导文案
 
 不做什么（边界）：
@@ -28,6 +30,7 @@ tools/breath/search.py — 有 query 的检索模式
 
 import asyncio
 import hashlib
+import inspect
 import random
 from datetime import datetime, time
 
@@ -35,7 +38,7 @@ from ombrebrain.policy.surfacing import SurfacePolicyVM
 from .. import _runtime as rt
 from ..plan.core import is_letter_bucket
 from ._verbatim import render_stored_bucket
-from utils import parse_bool, parse_iso_datetime
+from utils import count_tokens_approx, parse_bool, parse_iso_datetime
 
 _SURFACE_POLICY = SurfacePolicyVM.default()
 
@@ -255,6 +258,74 @@ def _similarity_tag(bucket: dict) -> str:
         return ""
 
 
+# ---------------------------------------------------------
+# 二改第 9 刀：查询拆词
+# query 里有空格时拆成几个词，每个词各自去找。全中照旧算字面命中；
+# 只中一部分的不加分、不续命，排在最后；条数或 token 放不下的，每条退成一行。
+# 开关：config.yaml 里 matching.query_split: false → 回到整句原样比。
+# ---------------------------------------------------------
+_PARTIAL_LINES_MAX = 10      # June 11-27 定：最多 10 行
+_PARTIAL_TITLE_CHARS = 20    # June 11-27 定：没标题时取正文开头 20 字
+_PARTIAL_BLOCK_HEADER = "=== 只中了部分词，没展开（按桶 ID 搜可看全文） ==="
+
+
+def _query_split_enabled() -> bool:
+    """读不到、写错了都按默认（开）；只有明确写 false/0/no/off 才回到旧行为。"""
+    cfg = getattr(rt, "config", None)
+    section = cfg.get("matching") if isinstance(cfg, dict) else None
+    if not isinstance(section, dict):
+        return True
+    value = section.get("query_split", True)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off")
+    return True
+
+
+def _search_accepts_split(search) -> bool:
+    """不认识 split_terms 的 manager（第三方/测试替身）就不传，照旧整句搜。"""
+    try:
+        params = inspect.signature(search).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.name == "split_terms" or p.kind is inspect.Parameter.VAR_KEYWORD
+        for p in params
+    )
+
+
+def _literal_terms_tag(bucket: dict) -> str:
+    """搜了不止一个词时头部标「字面 k/n」；一个词都没中的不标。"""
+    try:
+        hit, total = bucket.get("literal_terms")
+        hit, total = int(hit), int(total)
+    except (TypeError, ValueError):
+        return ""
+    if total < 2 or hit <= 0:
+        return ""
+    return f"[字面 {hit}/{total}] "
+
+
+def _partial_line(bucket: dict) -> str:
+    """放不下的部分命中退成一行：标题 | 字面 k/n | 创建日期 | 桶ID。"""
+    meta = bucket.get("metadata", {}) or {}
+    title = " ".join(str(meta.get("name") or "").split())
+    if not title:
+        body = " ".join(str(bucket.get("content") or "").split())
+        title = body[:_PARTIAL_TITLE_CHARS] or "（无标题）"
+    try:
+        hit, total = bucket.get("literal_terms")
+    except (TypeError, ValueError):
+        hit, total = 0, 0
+    raw_created = str(meta.get("created") or "").strip()
+    try:
+        created = parse_iso_datetime(raw_created).date().isoformat()
+    except (TypeError, ValueError, AttributeError):
+        created = raw_created[:10] or "日期未知"
+    return f"{title} | 字面 {hit}/{total} | {created} | {bucket.get('id', '')}"
+
+
 async def surface_search(
     query: str,
     max_results: int,
@@ -372,6 +443,8 @@ async def surface_search(
         "query_arousal": q_arousal,
         "vector_scores": vector_scores,
     }
+    if _query_split_enabled() and _search_accepts_split(rt.bucket_mgr.search):
+        search_kwargs["split_terms"] = True   # 二改第 9 刀：只有 breath 检索拆词
     try:
         try:
             matches = await rt.bucket_mgr.search(
@@ -409,6 +482,8 @@ async def surface_search(
         b for b in matches
         if _bucket_in_created_range(b, created_from, created_to)
     ]
+    # 二改第 9 刀：条数放不下的部分命中，留着退成一行。
+    overflow_partial = [b for b in matches[max_results:] if b.get("partial_only")]
     matches = matches[:max_results]
     rt.logger.info(
         "op=breath_search phase=ranking query_hash=%s matches=%s ids=%s",
@@ -422,7 +497,7 @@ async def surface_search(
     budget_blocked = False
     touched_ids: list = []   # 性能 P2：浮现后统一在后台 touch，不在响应路径逐条 await
     touch_mode, touch_semantic_min = _touch_policy()   # 二改第 4 刀
-    for bucket in matches:
+    for idx, bucket in enumerate(matches):
         meta = bucket["metadata"]
         bucket_id = bucket["id"]
         if _is_archived(bucket):
@@ -447,8 +522,16 @@ async def surface_search(
             rendered, entry_tokens = render_stored_bucket(
                 bucket, header, _footprint(bucket)
             )
+        lit_tag = _literal_terms_tag(bucket)   # 二改第 9 刀
+        if lit_tag:
+            rendered = lit_tag + rendered
+            entry_tokens = count_tokens_approx(rendered)
         if token_used + entry_tokens > max_tokens:
             budget_blocked = True
+            # 二改第 9 刀：token 放不下的部分命中，也退成一行。
+            overflow_partial = [
+                b for b in matches[idx:] if b.get("partial_only")
+            ] + overflow_partial
             break
         results.append(rendered)
         token_used += entry_tokens
@@ -461,6 +544,28 @@ async def surface_search(
     # ripple=False 跳过读全库的时间涟漪。响应不再等这些写盘/涟漪。
     if touched_ids:
         asyncio.create_task(rt.bucket_mgr.touch_many(touched_ids, ripple=False))
+
+    # 二改第 9 刀：放不下的部分命中每条退成一行，最多 10 行，算进 token 预算。
+    # 一行放不下就停；没列出来的有几条，照实数说。
+    if overflow_partial:
+        lines = []
+        used = token_used + count_tokens_approx(_PARTIAL_BLOCK_HEADER)
+        for b in overflow_partial[:_PARTIAL_LINES_MAX]:
+            line = _partial_line(b)
+            line_tokens = count_tokens_approx(line)
+            if used + line_tokens > max_tokens:
+                break
+            lines.append(line)
+            used += line_tokens
+        hidden = len(overflow_partial) - len(lines)
+        if lines:
+            token_used = used
+            block = [_PARTIAL_BLOCK_HEADER] + lines
+            if hidden:
+                block.append(f"还有 {hidden} 条没显示")
+            results.append("\n".join(block))
+        else:
+            results.append(f"[还有 {hidden} 条只中了部分词的没显示：token 预算不够]")
 
     # 检索命中不足时保留设计上的自由联想；用独立分区明确标记，
     # 避免调用方把随机旧桶误当成查询命中。

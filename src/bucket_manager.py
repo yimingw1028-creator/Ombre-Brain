@@ -481,6 +481,19 @@ def _meaning_texts(meta: dict) -> list[str]:
         return []
     return [m for m in raw if isinstance(m, str) and m.strip()]
 
+
+# 二改第 9 刀：查询拆词只按空格拆（半角、全角都算），去重，空的扔掉。
+_QUERY_SPLIT_RE = re.compile(r"[ \u3000]+")
+
+
+def _split_query_terms(q_norm: str) -> list[str]:
+    """把已经小写、去过首尾空白的查询拆成词，保留原来的顺序。"""
+    terms: list[str] = []
+    for term in _QUERY_SPLIT_RE.split(q_norm):
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
 # topic/emotion/time/touch 四个评分维度的纯函数 + 权重常量已拆到
 # ombrebrain.retrieval.bucket_scoring（search() 和 _calc_*_score wrapper 都从那里导入）。
 
@@ -3299,6 +3312,7 @@ class BucketManager:
         vector_scores: Optional[dict[str, float]] = None,
         include_archive: bool = False,
         allowed_bucket_ids: Optional[set[str]] = None,
+        split_terms: bool = False,
     ) -> list[dict]:
         """
         Multi-dimensional indexed search for memory buckets.
@@ -3306,6 +3320,7 @@ class BucketManager:
 
         domain_filter: pre-filter by domain (None = search all)
         query_valence/arousal: emotion coordinates for resonance scoring
+        split_terms: 二改第 9 刀，按空格拆词（默认不拆，只有 breath_search 传 True）
         """
         if not query or not query.strip():
             return []
@@ -3313,6 +3328,10 @@ class BucketManager:
         limit = limit or self.max_results
         # 字面召回：把查询原样（小写、去空白）留作子串匹配，保证显式搜的词必被召回
         q_norm = query.strip().lower()
+        # 二改第 9 刀：调用方要求拆才拆；拆出来不到两个词，一切照旧。
+        terms = _split_query_terms(q_norm) if split_terms else []
+        if len(terms) < 2:
+            terms = []
         all_buckets = await self.list_all(include_archive=include_archive)
 
         if not all_buckets:
@@ -3423,6 +3442,7 @@ class BucketManager:
             try:
                 # 字面命中：查询串原样出现在 name/tags/domain/正文 → 召回保障 + 排序加分
                 literal_hit = False
+                term_hits = 0
                 if q_norm:
                     hay = " ".join([
                         str(meta.get("name", "")),
@@ -3436,6 +3456,19 @@ class BucketManager:
                         literal_hit = any(
                             q_norm in m.lower() for m in _meaning_texts(meta)
                         )
+                    if terms:
+                        # 二改第 9 刀：每个词在 name/tags/domain/正文 或任意一条 meaning 里
+                        # 出现过就算中，不要求挨着、不要求在同一处。全中 = 字面命中。
+                        meanings = (
+                            [m.lower() for m in _meaning_texts(meta)]
+                            if include_meaning else []
+                        )
+                        term_hits = sum(
+                            1 for t in terms
+                            if t in hay or any(t in m for m in meanings)
+                        )
+                        if term_hits == len(terms):
+                            literal_hit = True
 
                 # Dim 1: topic relevance (fuzzy text, 0~1)
                 topic_score = self._calc_topic_score(query, bucket)
@@ -3493,7 +3526,12 @@ class BucketManager:
                     semantic_score is not None
                     and semantic_score >= _VECTOR_RECALL_THRESHOLD
                 )
-                if text_match or semantic_match:
+                # 二改第 9 刀：只因为部分命中才进来的，不加分、不算想起，排在最后。
+                partial_only = (
+                    bool(terms) and term_hits > 0
+                    and not (text_match or semantic_match)
+                )
+                if text_match or semantic_match or partial_only:
                     # Resolved buckets get ranking penalty (but still reachable by keyword)
                     # 已解决的桶仅在排序时降权
                     if meta.get("resolved", False):
@@ -3508,6 +3546,12 @@ class BucketManager:
                     # 混合分凑过线的弱命中不该刷新活跃时间。
                     bucket["literal_hit"] = bool(literal_hit)
                     bucket["semantic_score"] = semantic_score
+                    if terms:
+                        bucket["literal_terms"] = (term_hits, len(terms))
+                        bucket["partial_only"] = partial_only
+                    else:
+                        bucket.pop("literal_terms", None)
+                        bucket.pop("partial_only", None)
                     scored.append(bucket)
             except Exception as e:
                 logger.warning(
@@ -3517,6 +3561,13 @@ class BucketManager:
                 continue
 
         scored.sort(key=lambda x: x["score"], reverse=True)
+        if terms:
+            # 二改第 9 刀：拆词之前就能进来的照旧截到 limit；只因部分命中进来的
+            # 全部接在后面（先按中了几个词，再按原分），不截，让 breath 数得准还剩几条。
+            head = [b for b in scored if not b.get("partial_only")]
+            tail = [b for b in scored if b.get("partial_only")]
+            tail.sort(key=lambda x: x["literal_terms"][0], reverse=True)
+            return head[:limit] + tail
         return scored[:limit]
 
     # ---------------------------------------------------------
